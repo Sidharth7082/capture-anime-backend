@@ -25,3 +25,18 @@ export const historyQuery = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(20),
   animeId: z.coerce.number().int().positive().optional(),
 });
+
+export const historyBody = z.object({
+  animeId: z.coerce.number().int().positive(),
+  episode: z.coerce.number().int().positive(),
+});
+
+export const continueWatchingParams = z.object({
+  animeId: z.coerce.number().int().positive(),
+});
+
+export const saveContinueWatchingBody = z.object({
+  episodeNumber: z.coerce.number().int().positive(),
+  playbackPositionSeconds: z.coerce.number().int().min(0),
+  durationSeconds: z.coerce.number().int().min(0).optional(),
+});

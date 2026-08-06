@@ -41,5 +41,52 @@ export function createUserService({ repository }) {
       });
       return respond(items, total, { page, limit });
     },
+
+    /** Record a watched episode — one row per (user, episode), newest first. */
+    async addHistory(userId, { animeId, episode }) {
+      const episodeId = await repository.findEpisodeIdByAnimeAndNumber(animeId, episode);
+      if (episodeId == null) {
+        throw ApiError.notFound(`Episode ${episode} of anime ${animeId} not found`);
+      }
+      const row = await repository.touchHistory(userId, episodeId, {});
+      return { history: row };
+    },
+
+    // --- continue watching ------------------------------------------------
+
+    async listContinueWatching(userId, query) {
+      const { page, limit, offset } = paginate(query);
+      const { items, total } = await repository.listContinueWatching(userId, { limit, offset });
+      return respond(items, total, { page, limit });
+    },
+
+    /**
+     * Save playback progress (called roughly every 10s by the player).
+     * When the position reaches the end of the episode, the entry is removed
+     * instead (the episode is finished — nothing left to resume).
+     */
+    async saveContinueWatching(userId, animeId, body) {
+      const { episodeNumber, playbackPositionSeconds, durationSeconds } = body;
+      const nearEnd =
+        durationSeconds != null &&
+        playbackPositionSeconds >= Math.max(0, durationSeconds - 5);
+      if (nearEnd) {
+        await repository.deleteContinueWatching(userId, animeId);
+        return { animeId, completed: true, removed: true };
+      }
+      const row = await repository.upsertContinueWatching(userId, {
+        animeId,
+        episodeNumber,
+        playbackPositionSeconds,
+        durationSeconds,
+      });
+      return row;
+    },
+
+    async removeContinueWatching(userId, animeId) {
+      const deleted = await repository.deleteContinueWatching(userId, animeId);
+      if (deleted === 0) throw ApiError.notFound('No resume point for this anime');
+      return { success: true };
+    },
   };
 }

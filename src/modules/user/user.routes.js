@@ -8,6 +8,9 @@ import {
   addFavoriteBody,
   favoriteIdParams,
   historyQuery,
+  historyBody,
+  continueWatchingParams,
+  saveContinueWatchingBody,
 } from './user.schemas.js';
 
 export function createUserRouter({ userService }) {
@@ -25,6 +28,23 @@ export function createUserRouter({ userService }) {
     controller.removeFavorite,
   );
   router.get('/history', validate({ query: historyQuery }), controller.history);
+  router.post('/history', validate({ body: historyBody }), controller.addHistory);
+
+  router.get(
+    '/continue-watching',
+    validate({ query: favoritesQuery }),
+    controller.listContinueWatching,
+  );
+  router.put(
+    '/continue-watching/:animeId',
+    validate({ params: continueWatchingParams, body: saveContinueWatchingBody }),
+    controller.saveContinueWatching,
+  );
+  router.delete(
+    '/continue-watching/:animeId',
+    validate({ params: continueWatchingParams }),
+    controller.removeContinueWatching,
+  );
 
   return router;
 }

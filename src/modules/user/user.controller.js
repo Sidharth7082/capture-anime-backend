@@ -23,5 +23,23 @@ export function createUserController(userService) {
     history: asyncHandler(async (req, res) =>
       res.json(await userService.listHistory(userId(req), req.query)),
     ),
+
+    addHistory: asyncHandler(async (req, res) => {
+      const result = await userService.addHistory(userId(req), req.body);
+      res.json(result);
+    }),
+
+    listContinueWatching: asyncHandler(async (req, res) =>
+      res.json(await userService.listContinueWatching(userId(req), req.query)),
+    ),
+
+    saveContinueWatching: asyncHandler(async (req, res) => {
+      const result = await userService.saveContinueWatching(userId(req), req.params.animeId, req.body);
+      res.json(result);
+    }),
+
+    removeContinueWatching: asyncHandler(async (req, res) =>
+      res.json(await userService.removeContinueWatching(userId(req), req.params.animeId)),
+    ),
   };
 }

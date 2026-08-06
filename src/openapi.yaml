@@ -441,6 +441,112 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
 
+    post:
+      tags: [user]
+      summary: Record a watched episode (once per episode)
+      description: Upserts a watch-history row keyed by (user, episode). Calling
+        it again for the same episode only bumps watched_at — never a duplicate.
+      security: [{ BearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [animeId, episode]
+              properties:
+                animeId: { type: integer, minimum: 1 }
+                episode: { type: integer, minimum: 1 }
+      responses:
+        '200':
+          description: History upserted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  history: { type: object }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404':
+          description: Episode not found
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /api/user/continue-watching:
+    get:
+      tags: [user]
+      summary: List the user's resume points (continue watching)
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Paginated continue-watching list (newest first)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, meta]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/ContinueWatchingItem' }
+                  meta: { $ref: '#/components/schemas/PaginationMeta' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /api/user/continue-watching/{animeId}:
+    put:
+      tags: [user]
+      summary: Save playback progress (call roughly every 10 seconds)
+      description: Upserts the resume point for an anime. When
+        playbackPositionSeconds reaches within 5s of durationSeconds, the entry
+        is removed instead (episode completed).
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - { name: animeId, in: path, required: true, schema: { type: integer, minimum: 1 } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [episodeNumber, playbackPositionSeconds]
+              properties:
+                episodeNumber: { type: integer, minimum: 1 }
+                playbackPositionSeconds: { type: integer, minimum: 0 }
+                durationSeconds: { type: integer, minimum: 0 }
+      responses:
+        '200':
+          description: "Progress saved (or { completed: true, removed: true } when finished)"
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ContinueWatchingItem' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    delete:
+      tags: [user]
+      summary: Remove a resume point (e.g. after the anime is completed)
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - { name: animeId, in: path, required: true, schema: { type: integer, minimum: 1 } }
+      responses:
+        '200':
+          description: Removed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+        '404':
+          description: No resume point for this anime
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
 
   /api/watch/{animeId}/prefetch:
     get:
@@ -852,3 +958,22 @@ components:
         srclang: { type: string, nullable: true }
         default: { type: boolean }
         source: { type: string, nullable: true }
+
+    ContinueWatchingItem:
+      type: object
+      properties:
+        id: { type: integer }
+        animeId: { type: integer }
+        episodeNumber: { type: integer }
+        playbackPositionSeconds: { type: integer }
+        durationSeconds: { type: integer, nullable: true }
+        updatedAt: { type: string, format: date-time }
+        anime:
+          type: object
+          properties:
+            id: { type: integer }
+            title: { type: string }
+            coverImageLarge: { type: string, nullable: true }
+            coverImageMedium: { type: string, nullable: true }
+            format: { type: string, nullable: true }
+            episodes: { type: integer, nullable: true }

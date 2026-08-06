@@ -109,9 +109,96 @@ export function createUserRepository(pool) {
     },
 
     async deleteFavorite(userId, favoriteId) {
+      // Backward compatible: deletes by favorite row id OR by anime id
+      // (DELETE /api/user/favorites/:animeId).
       const { rowCount } = await pool.query(
-        `DELETE FROM favorites WHERE id = $1 AND user_id = $2`,
-        [favoriteId, userId],
+        `DELETE FROM favorites
+          WHERE user_id = $1
+            AND (id = $2 OR (anime_id = $2 AND anime_id IS NOT NULL))`,
+        [userId, favoriteId],
+      );
+      return rowCount;
+    },
+
+    // --- watch history (write) --------------------------------------------
+
+    async findEpisodeIdByAnimeAndNumber(animeId, number) {
+      const { rows } = await pool.query(
+        `SELECT id FROM episodes WHERE anime_id = $1 AND number = $2 LIMIT 1`,
+        [animeId, number],
+      );
+      return rows[0]?.id ?? null;
+    },
+
+    /** One row per (user, episode): touching an episode again just bumps
+     *  watched_at and merges progress — never a duplicate row. */
+    async touchHistory(userId, episodeId, { progressSeconds = null, durationSeconds = null, completed = false } = {}) {
+      const { rows } = await pool.query(
+        `INSERT INTO watch_history (user_id, episode_id, progress_seconds, duration_seconds, completed)
+         VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT (user_id, episode_id) DO UPDATE
+           SET watched_at = now(),
+               progress_seconds = COALESCE(EXCLUDED.progress_seconds, watch_history.progress_seconds),
+               duration_seconds = COALESCE(EXCLUDED.duration_seconds, watch_history.duration_seconds),
+               completed = watch_history.completed OR EXCLUDED.completed
+         RETURNING id, watched_at AS "watchedAt"`,
+        [userId, episodeId, progressSeconds, durationSeconds, completed],
+      );
+      return rows[0];
+    },
+
+    // --- continue watching -------------------------------------------------
+
+    async listContinueWatching(userId, { limit, offset }) {
+      const [{ rows }, { rows: countRows }] = await Promise.all([
+        pool.query(
+          `SELECT cw.id, cw.anime_id AS "animeId",
+                  cw.episode_number AS "episodeNumber",
+                  cw.playback_position_seconds AS "playbackPositionSeconds",
+                  cw.duration_seconds AS "durationSeconds",
+                  cw.updated_at AS "updatedAt",
+                  jsonb_strip_nulls(jsonb_build_object(
+                    'id', a.id,
+                    'title', coalesce(a.title_romaji, a.title_english, a.title_native),
+                    'coverImageLarge', a.cover_image_large,
+                    'coverImageMedium', a.cover_image_medium,
+                    'format', a.format,
+                    'episodes', a.episodes
+                  )) AS anime
+             FROM continue_watching cw
+             JOIN anime a ON a.id = cw.anime_id
+            WHERE cw.user_id = $1
+            ORDER BY cw.updated_at DESC
+            LIMIT $2 OFFSET $3`,
+          [userId, limit, offset],
+        ),
+        pool.query(`SELECT count(*)::int AS total FROM continue_watching WHERE user_id = $1`, [userId]),
+      ]);
+      return { items: rows, total: countRows[0].total };
+    },
+
+    async upsertContinueWatching(userId, { animeId, episodeNumber, playbackPositionSeconds, durationSeconds }) {
+      const { rows } = await pool.query(
+        `INSERT INTO continue_watching
+           (user_id, anime_id, episode_number, playback_position_seconds, duration_seconds, updated_at)
+         VALUES ($1, $2, $3, $4, $5, now())
+         ON CONFLICT (user_id, anime_id) DO UPDATE
+           SET episode_number = EXCLUDED.episode_number,
+               playback_position_seconds = EXCLUDED.playback_position_seconds,
+               duration_seconds = COALESCE(EXCLUDED.duration_seconds, continue_watching.duration_seconds),
+               updated_at = now()
+         RETURNING id, anime_id AS "animeId", episode_number AS "episodeNumber",
+                   playback_position_seconds AS "playbackPositionSeconds",
+                   duration_seconds AS "durationSeconds", updated_at AS "updatedAt"`,
+        [userId, animeId, episodeNumber, playbackPositionSeconds, durationSeconds ?? null],
+      );
+      return rows[0];
+    },
+
+    async deleteContinueWatching(userId, animeId) {
+      const { rowCount } = await pool.query(
+        `DELETE FROM continue_watching WHERE user_id = $1 AND anime_id = $2`,
+        [userId, animeId],
       );
       return rowCount;
     },
