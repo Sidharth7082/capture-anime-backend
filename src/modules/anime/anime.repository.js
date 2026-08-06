@@ -46,6 +46,14 @@ const ITEM_COLUMNS = `
     WHERE ag.anime_id = a.id) AS genres
 `;
 
+// The detail endpoint also returns the (potentially long, HTML) description,
+// aliased to "synopsis". Kept separate from ITEM_COLUMNS so list/search
+// payloads stay lean.
+const DETAIL_COLUMNS = `
+  ${ITEM_COLUMNS},
+  a.description AS "synopsis"
+`;
+
 function buildFilters({ status, format, season, year, includeAdult }) {
   const clauses = [];
   const params = [];
@@ -94,7 +102,7 @@ export function createAnimeRepository(pool) {
 
     async findAnimeById(id) {
       const { rows } = await pool.query(
-        `SELECT ${ITEM_COLUMNS} FROM anime a WHERE a.id = $1`,
+        `SELECT ${DETAIL_COLUMNS} FROM anime a WHERE a.id = $1`,
         [id],
       );
       return rows[0] ?? null;
