@@ -1,4 +1,4 @@
-import '../helpers/env.mjs';
+import '../../helpers/env.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
@@ -8,8 +8,8 @@ import {
   verifyRefreshToken,
   hashToken,
   refreshTokenLifetimeMs,
-} from '../../src/lib/jwt.js';
-import { ApiError } from '../../src/lib/errors.js';
+} from '../../../src/lib/jwt.js';
+import { ApiError } from '../../../src/lib/errors.js';
 
 const user = { id: '00000000-0000-0000-0000-000000000001', username: 'alice', role: 'viewer' };
 

@@ -12,6 +12,10 @@ import {
 import { hashPassword, verifyPassword } from '../../lib/password.js';
 import { ApiError } from '../../lib/errors.js';
 
+// Bcrypt hash of a throwaway random string. Compared against whenever the
+// account is unknown so login timing doesn't reveal which usernames exist.
+const DUMMY_HASH = '$2b$10$TRWzCXGCDYGv4dGAe5S6fe1hoAmvIzXC6kyVgT1INzRSUPzzScmQe';
+
 function publicUser(user) {
   return {
     id: user.id,
@@ -57,9 +61,10 @@ export function createAuthService({ repository, now = () => new Date() } = {}) {
 
     async login({ identifier, password }) {
       const user = await repository.findByEmailOrUsername(identifier);
-      const valid =
-        user && (await verifyPassword(password, user.password_hash));
-      if (!user || !valid) {
+      // Always run bcrypt — against the dummy hash when the account is
+      // unknown — so response timing does not reveal valid usernames.
+      const passwordOk = await verifyPassword(password, user?.password_hash ?? DUMMY_HASH);
+      if (!user || !passwordOk) {
         throw ApiError.unauthorized('Invalid credentials');
       }
       if (user.status !== 'active') {
@@ -77,8 +82,15 @@ export function createAuthService({ repository, now = () => new Date() } = {}) {
       const payload = verifyRefreshToken(refreshToken); // throws 401 on bad signature/expiry
       const stored = await repository.findRefreshTokenByHash(hashToken(refreshToken));
 
-      if (!stored || stored.revoked_at || stored.expires_at <= now()) {
+      if (!stored || stored.expires_at <= now()) {
         throw ApiError.unauthorized('Refresh token is invalid or has been revoked');
+      }
+
+      // A revoked token presented again means the token (or its rotation) was
+      // stolen — kill the whole token family and force a fresh login.
+      if (stored.revoked_at) {
+        await repository.revokeAllUserRefreshTokens(stored.user_id);
+        throw ApiError.unauthorized('Refresh token has been revoked');
       }
       if (stored.user_id !== payload.sub) {
         throw ApiError.unauthorized('Refresh token does not match its user');
@@ -91,12 +103,19 @@ export function createAuthService({ repository, now = () => new Date() } = {}) {
 
       // Rotation: the used token dies, a fresh pair is issued atomically.
       const tokens = issueTokens(user);
-      await repository.rotateRefreshToken({
+      const rotated = await repository.rotateRefreshToken({
         oldTokenId: stored.id,
         userId: user.id,
         newTokenHash: hashToken(tokens.refreshToken),
         newExpiresAt: new Date(now().getTime() + refreshTokenLifetimeMs()),
       });
+
+      // Concurrent double-submit: the old token was revoked between our read
+      // and the update — treat as replay.
+      if (rotated === false) {
+        await repository.revokeAllUserRefreshTokens(user.id);
+        throw ApiError.unauthorized('Refresh token has been revoked');
+      }
 
       return { user: publicUser(user), tokens };
     },

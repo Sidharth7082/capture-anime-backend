@@ -1,7 +1,7 @@
-import '../helpers/env.mjs';
+import '../../helpers/env.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parsePagination, buildPaginationMeta } from '../../src/lib/pagination.js';
+import { parsePagination, buildPaginationMeta } from '../../../src/lib/pagination.js';
 
 test('parsePagination defaults', () => {
   assert.deepEqual(parsePagination({}), { page: 1, limit: 20, offset: 0 });

@@ -1,7 +1,7 @@
-import '../helpers/env.mjs';
+import '../../helpers/env.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { hashPassword, verifyPassword } from '../../src/lib/password.js';
+import { hashPassword, verifyPassword } from '../../../src/lib/password.js';
 
 test('hash then verify roundtrip', async () => {
   const hash = await hashPassword('correct horse battery staple');

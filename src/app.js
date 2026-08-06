@@ -35,7 +35,17 @@ const openapiSpec = YAML.parse(
 
 function corsOrigin() {
   const origins = env.CORS_ORIGIN.split(',').map((o) => o.trim()).filter(Boolean);
-  if (origins.includes('*')) return true; // reflect any origin (dev)
+  if (origins.includes('*')) {
+    // Credentials (httpOnly refresh cookie) + reflecting any origin would let
+    // any website read authenticated responses — never acceptable in prod.
+    if (env.NODE_ENV === 'production') {
+      throw new Error(
+        'CORS_ORIGIN=* is not allowed in production (credentials are enabled). ' +
+          'Set an explicit comma-separated origin allowlist.',
+      );
+    }
+    return true; // reflect any origin in development only
+  }
   return origins;
 }
 
@@ -56,7 +66,6 @@ export function createApp({ authService, animeService, userService, cache, authL
   // --- global middleware ---------------------------------------------------
   app.use(helmet());
   app.use(cors({ origin: corsOrigin(), credentials: true }));
-  app.use(compression());
   app.use(express.json({ limit: '100kb' }));
   app.use(cookieParser());
   app.use(requestLogger);
@@ -93,16 +102,28 @@ export function createApp({ authService, animeService, userService, cache, authL
         res.status(429).json({ error: { code: 'RATE_LIMITED', message: 'Too many attempts' } }),
     });
 
+  // Auth responses carry tokens — serving them compressed would set up the
+  // BREACH attack precondition, so /api/auth bypasses compression.
   app.use('/api/auth', createAuthRouter({ authService, authLimiter: effectiveAuthLimiter }));
+
+  app.use(compression());
   app.use('/api/anime', createAnimeRouter({ animeService, cache, cacheTtlMs }));
   app.use('/api/episodes', createEpisodesRouter({ animeService, cache, cacheTtlMs }));
   app.use('/api/user', createUserRouter({ userService }));
 
   // --- OpenAPI ---------------------------------------------------------------
-  app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(openapiSpec, {
-    customSiteTitle: 'Anime Platform API',
-  }));
-  app.get('/api-docs.json', (_req, res) => res.json(openapiSpec));
+  // Exposes the full API surface — disabled by default in production unless
+  // explicitly enabled with SWAGGER_ENABLED=true.
+  const swaggerEnabled =
+    env.SWAGGER_ENABLED !== undefined
+      ? env.SWAGGER_ENABLED === 'true'
+      : env.NODE_ENV !== 'production';
+  if (swaggerEnabled) {
+    app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(openapiSpec, {
+      customSiteTitle: 'Anime Platform API',
+    }));
+    app.get('/api-docs.json', (_req, res) => res.json(openapiSpec));
+  }
 
   // --- errors ----------------------------------------------------------------
   app.use(notFound);

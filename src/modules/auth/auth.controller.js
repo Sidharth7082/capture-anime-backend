@@ -3,15 +3,25 @@
 // authenticate without storing it in JS.
 import { asyncHandler } from '../../lib/async-handler.js';
 import { refreshTokenLifetimeMs } from '../../lib/jwt.js';
+import { env } from '../../config/env.js';
 
 function refreshTokenFrom(req) {
   return req.body.refreshToken ?? req.cookies?.refresh_token ?? null;
 }
 
+function cookieIsSecure() {
+  // Explicit COOKIE_SECURE override wins; otherwise follow NODE_ENV. This
+  // prevents misconfigured deployments from sending the refresh cookie over
+  // plaintext HTTP in production.
+  return env.COOKIE_SECURE !== undefined
+    ? env.COOKIE_SECURE === 'true'
+    : env.NODE_ENV === 'production';
+}
+
 function setRefreshCookie(res, token, maxAgeMs) {
   res.cookie('refresh_token', token, {
     httpOnly: true,
-    secure: process.env.NODE_ENV === 'production',
+    secure: cookieIsSecure(),
     sameSite: 'lax',
     path: '/api/auth',
     maxAge: maxAgeMs,

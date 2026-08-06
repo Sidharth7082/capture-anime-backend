@@ -1,4 +1,4 @@
-import '../helpers/env.mjs';
+import '../../helpers/env.mjs';
 import { test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { createAuthService } from '../../../src/modules/auth/auth.service.js';
@@ -16,7 +16,7 @@ function makeFakeRepository() {
   const repo = {
     users,
     tokens,
-    calls: { createUser: 0, rotate: 0, revokeByHash: 0, lastLogin: 0 },
+    calls: { createUser: 0, rotate: 0, revokeByHash: 0, revokeAll: 0, lastLogin: 0 },
 
     async findByEmailOrUsername(identifier) {
       return users.find((u) => u.email === identifier || u.username === identifier) ?? null;
@@ -57,10 +57,17 @@ function makeFakeRepository() {
       const t = tokens.get(tokenHash);
       if (t) t.revoked_at = new Date();
     },
+    async revokeAllUserRefreshTokens(userId) {
+      repo.calls.revokeAll += 1;
+      for (const t of tokens.values()) if (t.user_id === userId) t.revoked_at = new Date();
+    },
     async rotateRefreshToken({ oldTokenId, userId, newTokenHash, newExpiresAt }) {
       repo.calls.rotate += 1;
-      for (const t of tokens.values()) if (t.id === oldTokenId) t.revoked_at = new Date();
+      const old = [...tokens.values()].find((t) => t.id === oldTokenId);
+      if (!old || old.revoked_at) return false; // replay/concurrent use
+      old.revoked_at = new Date();
       tokens.set(newTokenHash, { id: nextTokenId++, user_id: userId, token_hash: newTokenHash, expires_at: newExpiresAt, revoked_at: null });
+      return true;
     },
     async deleteExpiredRefreshTokens() {
       let n = 0;
@@ -168,8 +175,10 @@ test('refresh rotates the token pair', async () => {
   const first = await service.login({ identifier: 'alice', password: 'p' });
 
   const result = await service.refresh(first.tokens.refreshToken);
+  // Refresh tokens always differ (random jti); access tokens may be byte-identical
+  // when issued within the same second (same iat), so only the refresh pair is
+  // asserted to rotate.
   assert.notEqual(result.tokens.refreshToken, first.tokens.refreshToken);
-  assert.notEqual(result.tokens.accessToken, first.tokens.accessToken);
 
   // old token is revoked, new one is stored
   const oldRow = repo.tokens.get(hashToken(first.tokens.refreshToken));
@@ -189,6 +198,42 @@ test('refresh rejects a revoked token', async () => {
   const { tokens } = await service.login({ identifier: 'alice', password: 'p' });
   await service.logout(tokens.refreshToken);
 
+  await assert.rejects(service.refresh(tokens.refreshToken), (err) => err.status === 401);
+});
+
+test('refresh replay revokes the whole token family', async () => {
+  repo.users.push({
+    id: 'u1',
+    username: 'alice',
+    email: 'alice@example.com',
+    password_hash: await hashPassword('p'),
+    status: 'active',
+  });
+  const first = await service.login({ identifier: 'alice', password: 'p' });
+  const second = await service.login({ identifier: 'alice', password: 'p' });
+  assert.equal(repo.tokens.size, 2);
+
+  // First login's token is revoked normally; presenting it again is a replay.
+  await service.logout(first.tokens.refreshToken);
+  await assert.rejects(service.refresh(first.tokens.refreshToken), (err) => err.status === 401);
+
+  // Family revocation must have killed the OTHER live session too.
+  await assert.rejects(service.refresh(second.tokens.refreshToken), (err) => err.status === 401);
+  assert.ok(repo.calls.revokeAll >= 1);
+});
+
+test('concurrent double-submit of the same token is treated as replay', async () => {
+  repo.users.push({
+    id: 'u1',
+    username: 'alice',
+    email: 'alice@example.com',
+    password_hash: await hashPassword('p'),
+    status: 'active',
+  });
+  const { tokens } = await service.login({ identifier: 'alice', password: 'p' });
+
+  // Force the repository to report the rotation race (token already revoked).
+  repo.tokens.get(hashToken(tokens.refreshToken)).revoked_at = new Date();
   await assert.rejects(service.refresh(tokens.refreshToken), (err) => err.status === 401);
 });
 

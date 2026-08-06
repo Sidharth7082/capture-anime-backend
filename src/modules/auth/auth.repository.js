@@ -3,14 +3,10 @@
 import { ApiError } from '../../lib/errors.js';
 
 function mapCreateUserError(err) {
+  // One generic message for all unique violations: distinct messages would
+  // let anyone probe which usernames/emails are already registered.
   if (err.code === '23505') {
-    const constraint = err.constraint ?? '';
-    if (constraint.includes('username')) {
-      throw ApiError.conflict('Username is already taken');
-    }
-    if (constraint.includes('email')) {
-      throw ApiError.conflict('Email is already registered');
-    }
+    throw ApiError.conflict('Username or email is already in use');
   }
   throw err;
 }
@@ -91,26 +87,42 @@ export function createAuthRepository(pool) {
       );
     },
 
-    /** Atomically revoke the old token and persist the new one (rotation). */
+    /** Atomically revoke the old token and persist the new one (rotation).
+     *  Returns false when the old token was already revoked — i.e. the same
+     *  refresh token was used concurrently, which the caller treats as replay.
+     */
     async rotateRefreshToken({ oldTokenId, userId, newTokenHash, newExpiresAt }) {
       const client = await pool.connect();
       try {
         await client.query('BEGIN');
-        await client.query(
+        const { rowCount } = await client.query(
           `UPDATE refresh_tokens SET revoked_at = now() WHERE id = $1 AND revoked_at IS NULL`,
           [oldTokenId],
         );
+        if (rowCount === 0) {
+          await client.query('ROLLBACK');
+          return false;
+        }
         await client.query(
           `INSERT INTO refresh_tokens (user_id, token_hash, expires_at) VALUES ($1, $2, $3)`,
           [userId, newTokenHash, newExpiresAt],
         );
         await client.query('COMMIT');
+        return true;
       } catch (err) {
         await client.query('ROLLBACK').catch(() => {});
         throw err;
       } finally {
         client.release();
       }
+    },
+
+    /** Revoke every live refresh token of a user (replay/family revocation). */
+    async revokeAllUserRefreshTokens(userId) {
+      await pool.query(
+        `UPDATE refresh_tokens SET revoked_at = now() WHERE user_id = $1 AND revoked_at IS NULL`,
+        [userId],
+      );
     },
 
     /** Housekeeping: drop expired tokens (call periodically). */

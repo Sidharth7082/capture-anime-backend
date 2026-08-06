@@ -1,4 +1,4 @@
-import '../helpers/env.mjs';
+import '../../helpers/env.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createAnimeService } from '../../../src/modules/anime/anime.service.js';
@@ -20,7 +20,10 @@ function makeFakeRepository() {
     async findRatingStats() { return { count: 3, average: 8.5 }; },
     async countEpisodes() { return 25; },
     async animeExists(id) { return id === 1; },
-    async searchAnime({ q, limit, offset }) { return { items: [{ id: 1 }], total: 1 }; },
+    async searchAnime({ q, limit, offset }) {
+      repo.calls.push({ method: 'searchAnime', q, limit, offset });
+      return { items: [{ id: 1 }], total: 1 };
+    },
     async findGenreById(id) { return id === 5 ? { id: 5, name: 'Action' } : null; },
     async listByGenre() { return { items: [], total: 0 }; },
     async findStudioById(id) { return id === 6 ? { id: 6, name: 'MAPPA' } : null; },
@@ -35,11 +38,11 @@ test('list returns data + pagination meta and passes filters', async () => {
   const service = createAnimeService({ repository: repo });
 
   const result = await service.list({
-    page: '2',
-    limit: '10',
+    page: 2,
+    limit: 10,
     status: 'RELEASING',
     season: 'WINTER',
-    year: '2024',
+    year: 2024,
     sort: 'score_desc',
     includeAdult: true,
   });

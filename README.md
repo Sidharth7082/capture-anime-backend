@@ -169,7 +169,74 @@ npm run import -- --dry-run --max-pages 1   # validate without writing
 
 ---
 
-## 4. Production notes
+## 4. Express REST API backend
+
+A production-oriented Express API on top of the same database.
+
+```
+src/
+├── app.js                  # createApp({services, cache}) — DI factory (testable)
+├── server.js               # bootstrap + graceful shutdown + token pruner
+├── config/env.js           # zod-validated env (fails fast on bad config)
+├── db/pool.js              # pg pool (INT8 -> number) + withTransaction
+├── lib/                    # logger (winston), jwt, password, cache, pagination, errors
+├── middleware/             # authenticate, validate (zod), error-handler, cache, request-logger
+├── modules/
+│   ├── auth/               # repository -> service -> controller -> routes
+│   ├── anime/              # catalog queries (parameterized, whitelisted sorts)
+│   └── user/               # profile, favorites, watch history
+└── openapi.yaml            # complete OpenAPI 3 spec (served at /api-docs)
+```
+
+### Endpoints
+
+| Area | Routes |
+|---|---|
+| Catalog | `GET /api/anime`, `/api/anime/:id`, `/api/anime/trending`, `/api/anime/popular`, `/api/anime/recent`, `/api/anime/search?q=`, `/api/anime/genre/:id`, `/api/anime/studio/:id`, `GET /api/episodes/:animeId` |
+| Auth | `POST /api/auth/register`, `/login`, `/refresh`, `/logout` |
+| User (JWT) | `GET /api/user/profile`, `GET|POST /api/user/favorites`, `DELETE /api/user/favorites/:id`, `GET /api/user/history` |
+
+All list endpoints support `page`/`limit` pagination (`data` + `meta` envelope),
+`sort` where relevant, and are cached (`X-Cache: HIT|MISS`). Full request/response
+schemas are in the Swagger UI at **`/api-docs`** (JSON: `/api-docs.json`).
+
+### Auth design
+
+* **Access token** (15m, HS256, pinned algorithm) in `Authorization: Bearer`.
+* **Refresh token** (30d) rotated on every use, stored **hashed (SHA-256)** in
+  `refresh_tokens`, delivered as an httpOnly cookie **and** in the body (mobile
+  clients); `Secure` in production (`COOKIE_SECURE` override available).
+* **Replay protection**: presenting a revoked token kills the user's whole
+  token family; a concurrent double-submit is detected via rotation `rowCount`.
+* bcrypt (10 rounds) with an explicit 72-byte limit; login timing is constant
+  via a dummy hash; register returns a generic conflict message.
+* Login/register/refresh are rate-limited (default 10 per 15 min per IP).
+
+### Run locally
+
+```bash
+cp .env.example .env
+node scripts/generate-secrets.mjs   # paste JWT_ACCESS_SECRET / JWT_REFRESH_SECRET
+npm run migrate                     # applies db/migrations/*
+npm run dev                         # watch mode on :3000 (default)
+npm test                            # 69 unit tests (node:test + supertest)
+```
+
+### Docker
+
+```bash
+cp .env.example .env && node scripts/generate-secrets.mjs
+docker compose up -d --build        # Postgres 16 + API (migrations run on boot)
+# API http://localhost:3000 · Swagger http://localhost:3000/api-docs
+```
+
+The compose stack refuses to start without `POSTGRES_PASSWORD`, both JWT
+secrets and an explicit `CORS_ORIGIN` (no `*` in production — the app throws at
+startup). The API container runs as non-root.
+
+---
+
+## 5. Production notes
 
 * **Connection pooling** — `src/db.js` exports a `pg.Pool` (`PGPOOLMAX`,
   default 10); scale it with the app's concurrency.
@@ -189,7 +256,7 @@ npm run import -- --dry-run --max-pages 1   # validate without writing
 
 ---
 
-## 5. Tests
+## 6. Tests
 
 ```bash
 npm run test:smoke   # apply + roll back all migrations on in-memory Postgres

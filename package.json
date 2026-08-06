@@ -21,7 +21,7 @@
     "db:verify": "node scripts/verify-setup.mjs",
     "dev": "node --watch src/server.js",
     "start": "node src/server.js",
-    "test": "node --test test/unit/*.test.mjs",
+    "test": "node --test 'test/unit/**/*.test.mjs'",
     "secrets": "node scripts/generate-secrets.mjs"
   },
   "dependencies": {

@@ -22,6 +22,11 @@ const envSchema = z.object({
   CORS_ORIGIN: z.string().default('*'), // comma-separated list, or * for all
   TRUST_PROXY: z.string().default('false'), // 'false' | 'true' | number of hops
 
+  // Explicit cookie/secure override; defaults to NODE_ENV === 'production'.
+  COOKIE_SECURE: z.enum(['true', 'false']).optional(),
+  // Swagger UI: enabled by default outside production, can be forced on/off.
+  SWAGGER_ENABLED: z.enum(['true', 'false']).optional(),
+
   RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().default(15 * 60 * 1000),
   RATE_LIMIT_MAX: z.coerce.number().int().positive().default(300),
   AUTH_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(10),

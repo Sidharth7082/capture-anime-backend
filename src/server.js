@@ -3,12 +3,27 @@ import { createProductionApp } from './app.js';
 import { env } from './config/env.js';
 import { logger } from './lib/logger.js';
 import { pool } from './db/pool.js';
+import { createAuthRepository } from './modules/auth/auth.repository.js';
+import { createAuthService } from './modules/auth/auth.service.js';
 
 const app = createProductionApp();
 const server = app.listen(env.PORT, () => {
   logger.info(`Anime Platform API listening on http://0.0.0.0:${env.PORT} (${env.NODE_ENV})`);
   logger.info(`Swagger docs: http://localhost:${env.PORT}/api-docs`);
 });
+
+// Housekeeping: prune expired refresh tokens (6h default). unref() keeps the
+// interval from holding the process open during shutdown.
+const pruner = setInterval(async () => {
+  try {
+    const service = createAuthService({ repository: createAuthRepository(pool) });
+    const removed = await service.pruneExpiredTokens();
+    if (removed > 0) logger.info(`Pruned ${removed} expired refresh token(s)`);
+  } catch (err) {
+    logger.error(`Refresh-token pruning failed: ${err.message}`);
+  }
+}, 6 * 60 * 60 * 1000);
+pruner.unref();
 
 let shuttingDown = false;
 function shutdown(signal) {

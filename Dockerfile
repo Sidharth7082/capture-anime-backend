@@ -11,9 +11,11 @@ FROM node:22-alpine AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
 COPY --from=deps /app/node_modules ./node_modules
-COPY package.json ./
-COPY db ./db
-COPY src ./src
+COPY --chown=node:node package.json ./
+COPY --chown=node:node db ./db
+COPY --chown=node:node src ./src
+# Run as non-root: a compromised process must not be root in the container.
+USER node
 EXPOSE 3000
 
 # BusyBox wget ships with alpine.

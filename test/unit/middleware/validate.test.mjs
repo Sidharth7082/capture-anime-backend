@@ -1,9 +1,9 @@
-import '../helpers/env.mjs';
+import '../../helpers/env.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import request from 'supertest';
 import express from 'express';
-import { validate } from '../../src/middleware/validate.js';
+import { validate } from '../../../src/middleware/validate.js';
 import { z } from 'zod';
 
 function makeApp(schemas) {

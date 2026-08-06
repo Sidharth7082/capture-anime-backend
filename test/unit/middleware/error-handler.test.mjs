@@ -1,8 +1,8 @@
-import '../helpers/env.mjs';
+import '../../helpers/env.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { errorHandler } from '../../src/middleware/error-handler.js';
-import { ApiError } from '../../src/lib/errors.js';
+import { errorHandler } from '../../../src/middleware/error-handler.js';
+import { ApiError } from '../../../src/lib/errors.js';
 import { ZodError } from 'zod';
 
 function capture() {

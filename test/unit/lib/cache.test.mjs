@@ -1,7 +1,7 @@
-import '../helpers/env.mjs';
+import '../../helpers/env.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { TtlCache } from '../../src/lib/cache.js';
+import { TtlCache } from '../../../src/lib/cache.js';
 
 test('set/get roundtrip', () => {
   const cache = new TtlCache({ ttlMs: 1000 });

@@ -1,7 +1,10 @@
 # ============================================================================
 # Full stack: PostgreSQL + API.
 #
-#   cp .env.example .env        # set JWT_ACCESS_SECRET / JWT_REFRESH_SECRET
+#   cp .env.example .env
+#   node scripts/generate-secrets.mjs   # then paste into .env
+#   # .env must define: POSTGRES_PASSWORD, JWT_ACCESS_SECRET, JWT_REFRESH_SECRET,
+#   #                   CORS_ORIGIN (explicit allowlist for production)
 #   docker compose up -d --build
 #   # API:      http://localhost:3000/api/...
 #   # Swagger:  http://localhost:3000/api-docs
@@ -11,7 +14,7 @@ services:
     image: postgres:16-alpine
     environment:
       POSTGRES_USER: anime
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-anime}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
       POSTGRES_DB: anime_platform
     volumes:
       - pgdata:/var/lib/postgresql/data
@@ -27,10 +30,12 @@ services:
     environment:
       NODE_ENV: production
       PORT: 3000
-      DATABASE_URL: postgres://anime:${POSTGRES_PASSWORD:-anime}@db:5432/anime_platform
+      DATABASE_URL: postgres://anime:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}@db:5432/anime_platform
       JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:?JWT_ACCESS_SECRET must be set in .env}
       JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:?JWT_REFRESH_SECRET must be set in .env}
-      CORS_ORIGIN: ${CORS_ORIGIN:-*}
+      CORS_ORIGIN: ${CORS_ORIGIN:?CORS_ORIGIN must be an explicit origin allowlist in production}
+      # Behind a reverse proxy/load balancer set this to the hop count (e.g. 1)
+      # so rate limiting keys on the real client IP.
       TRUST_PROXY: ${TRUST_PROXY:-false}
       LOG_LEVEL: ${LOG_LEVEL:-info}
       CACHE_TTL_MS: ${CACHE_TTL_MS:-60000}

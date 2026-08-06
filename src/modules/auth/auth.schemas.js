@@ -1,7 +1,15 @@
 // Auth request/response schemas.
 import { z } from 'zod';
 
-const passwordSchema = z.string().min(8, 'Password must be at least 8 characters').max(72);
+const passwordSchema = z
+  .string()
+  .min(8, 'Password must be at least 8 characters')
+  .max(72)
+  // bcrypt truncates at 72 BYTES, so enforce the byte limit explicitly
+  // (multi-byte UTF-8 characters would otherwise be silently cut).
+  .refine((value) => Buffer.byteLength(value, 'utf8') <= 72, {
+    message: 'Password must be at most 72 bytes (bcrypt limit)',
+  });
 
 export const registerSchema = z.object({
   username: z
