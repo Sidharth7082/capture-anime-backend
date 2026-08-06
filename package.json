@@ -15,7 +15,9 @@
     "import": "node src/cli.js",
     "import:anime": "node src/cli.js --type ANIME --sort POPULARITY_DESC",
     "test:smoke": "node test/migrations.smoke.test.mjs",
-    "test:e2e": "node test/e2e.import.test.mjs"
+    "test:e2e": "node test/e2e.import.test.mjs",
+    "db:start": "bash scripts/start-postgres.sh",
+    "db:report": "node scripts/report-counts.mjs"
   },
   "dependencies": {
     "dotenv": "^16.4.5",
