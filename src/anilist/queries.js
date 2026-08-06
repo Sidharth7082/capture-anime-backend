@@ -13,6 +13,7 @@
 export const MEDIA_FIELDS = /* GraphQL */ `
   id
   idMal
+  type
   title {
     romaji
     english

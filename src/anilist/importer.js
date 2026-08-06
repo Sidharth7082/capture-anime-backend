@@ -46,7 +46,7 @@ function nullish(value) {
 async function upsertAnime(client, media) {
   const { rows } = await client.query(
     `INSERT INTO anime (
-       anilist_id, id_mal, title_romaji, title_english, title_native, synonyms,
+       anilist_id, id_mal, media_type, title_romaji, title_english, title_native, synonyms,
        description, format, status, episodes, duration_minutes,
        start_date, end_date, season, season_year,
        average_score, mean_score, popularity, favourites, source, is_adult,
@@ -54,11 +54,12 @@ async function upsertAnime(client, media) {
        trailer_id, trailer_site, trailer_thumbnail
      ) VALUES (
        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
-       $12, $13, $14, $15, $16, $17, $18, $19, $20, $21,
-       $22, $23, $24, $25, $26, $27, $28
+       $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22,
+       $23, $24, $25, $26, $27, $28, $29
      )
      ON CONFLICT (anilist_id) DO UPDATE SET
        id_mal              = EXCLUDED.id_mal,
+       media_type          = EXCLUDED.media_type,
        title_romaji        = EXCLUDED.title_romaji,
        title_english       = EXCLUDED.title_english,
        title_native        = EXCLUDED.title_native,
@@ -89,6 +90,7 @@ async function upsertAnime(client, media) {
     [
       media.id,
       nullish(media.idMal),
+      nullish(media.type) ?? 'ANIME',
       nullish(media.title?.romaji),
       nullish(media.title?.english),
       nullish(media.title?.native),

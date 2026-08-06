@@ -103,6 +103,12 @@ async function main() {
   if (genreCount < perPage) throw new Error('anime_genres too few');
   ok(`${genreCount} anime_genres links`);
 
+  const { rows: types } = await db.query(`SELECT DISTINCT media_type FROM anime`);
+  if (types.length !== 1 || types[0].media_type !== 'ANIME') {
+    throw new Error(`unexpected media_type values: ${JSON.stringify(types)}`);
+  }
+  ok(`media_type stored correctly (${types[0].media_type})`);
+
   const charCount = await count(`SELECT count(*)::int AS n FROM anime_characters`);
   if (charCount < perPage) throw new Error('anime_characters too few');
   ok(`${charCount} anime_characters links`);
