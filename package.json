@@ -18,14 +18,31 @@
     "test:e2e": "node test/e2e.import.test.mjs",
     "db:start": "bash scripts/start-postgres.sh",
     "db:report": "node scripts/report-counts.mjs",
-    "db:verify": "node scripts/verify-setup.mjs"
+    "db:verify": "node scripts/verify-setup.mjs",
+    "dev": "node --watch src/server.js",
+    "start": "node src/server.js",
+    "test": "node --test test/unit/*.test.mjs",
+    "secrets": "node scripts/generate-secrets.mjs"
   },
   "dependencies": {
-    "dotenv": "^16.4.5",
-    "pg": "^8.13.1"
+    "bcryptjs": "^3.0.3",
+    "compression": "^1.8.1",
+    "cookie-parser": "^1.4.7",
+    "cors": "^2.8.6",
+    "dotenv": "^16.6.1",
+    "express": "^4.22.2",
+    "express-rate-limit": "^7.5.1",
+    "helmet": "^8.3.0",
+    "jsonwebtoken": "^9.0.3",
+    "pg": "^8.22.0",
+    "swagger-ui-express": "^5.0.1",
+    "winston": "^3.19.0",
+    "yaml": "^2.9.0",
+    "zod": "^3.25.76"
   },
   "devDependencies": {
     "@electric-sql/pglite": "^0.2.16",
-    "pg-gateway": "^0.3.0-beta.4"
+    "pg-gateway": "^0.3.0-beta.4",
+    "supertest": "^7.2.2"
   }
 }

@@ -1,0 +1,745 @@
+openapi: 3.0.3
+info:
+  title: Anime Platform API
+  description: |
+    REST API for the anime streaming platform — catalog (anime, genres,
+    studios, characters, episodes), JWT authentication with refresh-token
+    rotation, and per-user favorites / watch history.
+
+    All catalog endpoints are cacheable (X-Cache header) and support
+    `page` / `limit` pagination with `total` / `totalPages` metadata.
+  version: 1.0.0
+servers:
+  - url: /
+    description: Current host
+tags:
+  - name: anime
+    description: Public catalog endpoints
+  - name: auth
+    description: Registration, login, token refresh, logout
+  - name: user
+    description: Authenticated user endpoints
+  - name: system
+    description: Health
+paths:
+  /health:
+    get:
+      tags: [system]
+      summary: Health check
+      security: []
+      responses:
+        '200':
+          description: Service healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: ok }
+                  uptime: { type: number }
+        '503':
+          description: Database unreachable
+
+  /api/anime:
+    get:
+      tags: [anime]
+      summary: List anime
+      description: Paginated catalog with optional filters and sorting.
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Limit'
+        - { name: status, in: query, schema: { $ref: '#/components/schemas/MediaStatus' }, description: Filter by status }
+        - { name: format, in: query, schema: { $ref: '#/components/schemas/MediaFormat' }, description: Filter by format }
+        - { name: season, in: query, schema: { $ref: '#/components/schemas/MediaSeason' }, description: Filter by season }
+        - { name: year, in: query, schema: { type: integer, minimum: 1917, maximum: 2100 }, description: Filter by season year }
+        - { name: sort, in: query, schema: { $ref: '#/components/schemas/AnimeSort' }, description: Sort order }
+        - { name: includeAdult, in: query, schema: { type: boolean }, description: Include adult titles (default false) }
+      responses:
+        '200':
+          description: Paginated list of anime
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, meta]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/AnimeListItem' }
+                  meta: { $ref: '#/components/schemas/PaginationMeta' }
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+  /api/anime/trending:
+    get:
+      tags: [anime]
+      summary: Trending anime
+      description: Sorted by popularity.
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Paginated list
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, meta]
+                properties:
+                  data: { type: array, items: { $ref: '#/components/schemas/AnimeListItem' } }
+                  meta: { $ref: '#/components/schemas/PaginationMeta' }
+
+  /api/anime/popular:
+    get:
+      tags: [anime]
+      summary: Popular anime
+      description: Sorted by average score.
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Paginated list
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, meta]
+                properties:
+                  data: { type: array, items: { $ref: '#/components/schemas/AnimeListItem' } }
+                  meta: { $ref: '#/components/schemas/PaginationMeta' }
+
+  /api/anime/recent:
+    get:
+      tags: [anime]
+      summary: Recently updated anime
+      description: Sorted by catalog update time.
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Paginated list
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, meta]
+                properties:
+                  data: { type: array, items: { $ref: '#/components/schemas/AnimeListItem' } }
+                  meta: { $ref: '#/components/schemas/PaginationMeta' }
+
+  /api/anime/search:
+    get:
+      tags: [anime]
+      summary: Search anime
+      description: Full-text + fuzzy title search.
+      parameters:
+        - { name: q, in: query, required: true, schema: { type: string, minLength: 1, maxLength: 100 }, description: Search query }
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Paginated results
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, meta]
+                properties:
+                  data: { type: array, items: { $ref: '#/components/schemas/AnimeListItem' } }
+                  meta: { $ref: '#/components/schemas/PaginationMeta' }
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+  /api/anime/genre/{id}:
+    get:
+      tags: [anime]
+      summary: Anime by genre
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer, minimum: 1 }, description: Genre id }
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Paginated list
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [genre, data, meta]
+                properties:
+                  genre: { $ref: '#/components/schemas/GenreRef' }
+                  data: { type: array, items: { $ref: '#/components/schemas/AnimeListItem' } }
+                  meta: { $ref: '#/components/schemas/PaginationMeta' }
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/anime/studio/{id}:
+    get:
+      tags: [anime]
+      summary: Anime by studio
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer, minimum: 1 }, description: Studio id }
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Paginated list
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [studio, data, meta]
+                properties:
+                  studio: { $ref: '#/components/schemas/Studio' }
+                  data: { type: array, items: { $ref: '#/components/schemas/AnimeListItem' } }
+                  meta: { $ref: '#/components/schemas/PaginationMeta' }
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/anime/{id}:
+    get:
+      tags: [anime]
+      summary: Anime detail
+      description: Full detail incl. genres, studios, characters with voice actors, rating and episode count.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer, minimum: 1 }, description: Anime id }
+      responses:
+        '200':
+          description: Anime detail
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AnimeDetail' }
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/episodes/{animeId}:
+    get:
+      tags: [anime]
+      summary: Episodes of an anime
+      parameters:
+        - { name: animeId, in: path, required: true, schema: { type: integer, minimum: 1 }, description: Anime id }
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Paginated episodes
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [animeId, data, meta]
+                properties:
+                  animeId: { type: integer }
+                  data: { type: array, items: { $ref: '#/components/schemas/Episode' } }
+                  meta: { $ref: '#/components/schemas/PaginationMeta' }
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/auth/register:
+    post:
+      tags: [auth]
+      summary: Register a new account
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RegisterRequest' }
+      responses:
+        '201':
+          description: Account created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuthResponse' }
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /api/auth/login:
+    post:
+      tags: [auth]
+      summary: Log in
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LoginRequest' }
+      responses:
+        '200':
+          description: Logged in
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuthResponse' }
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /api/auth/refresh:
+    post:
+      tags: [auth]
+      summary: Refresh tokens
+      description: Rotates the refresh token and issues a new access/refresh pair. The refresh token may come from the httpOnly `refresh_token` cookie or the request body.
+      security: []
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TokenRequest' }
+      responses:
+        '200':
+          description: New token pair
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuthResponse' }
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+  /api/auth/logout:
+    post:
+      tags: [auth]
+      summary: Log out
+      description: Revokes the presented refresh token (body or cookie).
+      security: []
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TokenRequest' }
+      responses:
+        '200':
+          description: Logged out
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+
+  /api/user/profile:
+    get:
+      tags: [user]
+      summary: Current user profile
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Profile
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/User' }
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/user/favorites:
+    get:
+      tags: [user]
+      summary: List favorites
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Paginated favorites
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, meta]
+                properties:
+                  data: { type: array, items: { $ref: '#/components/schemas/Favorite' } }
+                  meta: { $ref: '#/components/schemas/PaginationMeta' }
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    post:
+      tags: [user]
+      summary: Add a favorite
+      description: Exactly one of animeId, characterId or staffId must be provided.
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AddFavoriteRequest' }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  favorite: { $ref: '#/components/schemas/Favorite' }
+        '200':
+          description: Already favorited (no-op)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  favorite: { $ref: '#/components/schemas/Favorite' }
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/user/favorites/{id}:
+    delete:
+      tags: [user]
+      summary: Remove a favorite
+      security:
+        - BearerAuth: []
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer, minimum: 1 }, description: Favorite id }
+      responses:
+        '200':
+          description: Removed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/user/history:
+    get:
+      tags: [user]
+      summary: Watch history
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Limit'
+        - { name: animeId, in: query, schema: { type: integer, minimum: 1 }, description: Filter by anime }
+      responses:
+        '200':
+          description: Paginated history
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, meta]
+                properties:
+                  data: { type: array, items: { $ref: '#/components/schemas/HistoryItem' } }
+                  meta: { $ref: '#/components/schemas/PaginationMeta' }
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    Page:
+      name: page
+      in: query
+      description: Page number (1-based)
+      schema: { type: integer, minimum: 1, default: 1 }
+    Limit:
+      name: limit
+      in: query
+      description: Items per page (max 100)
+      schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+
+  responses:
+    BadRequest:
+      description: Invalid request payload
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Unauthorized:
+      description: Missing, invalid or expired credentials
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Conflict:
+      description: Resource already exists
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    RateLimited:
+      description: Too many requests
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: { type: string, example: VALIDATION_ERROR }
+            message: { type: string }
+            details:
+              type: array
+              items:
+                type: object
+                properties:
+                  path: { type: string }
+                  message: { type: string }
+
+    PaginationMeta:
+      type: object
+      required: [page, limit, total, totalPages, hasNextPage]
+      properties:
+        page: { type: integer, example: 1 }
+        limit: { type: integer, example: 20 }
+        total: { type: integer, example: 250 }
+        totalPages: { type: integer, example: 13 }
+        hasNextPage: { type: boolean, example: true }
+
+    MediaStatus:
+      type: string
+      enum: [FINISHED, RELEASING, NOT_YET_RELEASED, CANCELLED, HIATUS]
+    MediaFormat:
+      type: string
+      enum: [TV, TV_SHORT, MOVIE, SPECIAL, OVA, ONA, MUSIC]
+    MediaSeason:
+      type: string
+      enum: [WINTER, SPRING, SUMMER, FALL]
+    AnimeSort:
+      type: string
+      enum: [popularity_desc, popularity_asc, score_desc, score_asc, recent_desc, start_date_desc, title_asc, title_desc]
+
+    GenreRef:
+      type: object
+      properties:
+        id: { type: integer }
+        name: { type: string }
+
+    AnimeListItem:
+      type: object
+      properties:
+        id: { type: integer, example: 1 }
+        anilistId: { type: integer, example: 16498 }
+        idMal: { type: integer, nullable: true }
+        titleRomaji: { type: string, nullable: true }
+        titleEnglish: { type: string, nullable: true }
+        titleNative: { type: string, nullable: true }
+        synonyms: { type: array, items: { type: string } }
+        mediaType: { type: string, enum: [ANIME, MANGA] }
+        format: { $ref: '#/components/schemas/MediaFormat' }
+        status: { $ref: '#/components/schemas/MediaStatus' }
+        episodes: { type: integer, nullable: true }
+        durationMinutes: { type: integer, nullable: true }
+        season: { $ref: '#/components/schemas/MediaSeason' }
+        seasonYear: { type: integer, nullable: true }
+        startDate: { type: string, format: date, nullable: true }
+        endDate: { type: string, format: date, nullable: true }
+        averageScore: { type: number, nullable: true }
+        meanScore: { type: number, nullable: true }
+        popularity: { type: integer, nullable: true }
+        favourites: { type: integer, nullable: true }
+        source: { type: string, nullable: true }
+        isAdult: { type: boolean }
+        coverImageLarge: { type: string, format: uri, nullable: true }
+        coverImageMedium: { type: string, format: uri, nullable: true }
+        coverImageColor: { type: string, nullable: true }
+        bannerImage: { type: string, format: uri, nullable: true }
+        updatedAt: { type: string, format: date-time }
+        genres:
+          type: array
+          items: { $ref: '#/components/schemas/GenreRef' }
+
+    Studio:
+      type: object
+      properties:
+        id: { type: integer }
+        name: { type: string }
+        isAnimationStudio: { type: boolean }
+        isMain: { type: boolean }
+
+    VoiceActor:
+      type: object
+      properties:
+        id: { type: integer }
+        nameFirst: { type: string }
+        nameLast: { type: string, nullable: true }
+        language: { type: string }
+
+    Character:
+      type: object
+      properties:
+        id: { type: integer }
+        nameFirst: { type: string }
+        nameLast: { type: string, nullable: true }
+        nameNative: { type: string, nullable: true }
+        imageLarge: { type: string, format: uri, nullable: true }
+        imageMedium: { type: string, format: uri, nullable: true }
+        role: { type: string, enum: [MAIN, SUPPORTING, BACKGROUND] }
+        sortOrder: { type: integer }
+        voiceActors:
+          type: array
+          items: { $ref: '#/components/schemas/VoiceActor' }
+
+    Rating:
+      type: object
+      properties:
+        count: { type: integer }
+        average: { type: number }
+
+    AnimeDetail:
+      allOf:
+        - $ref: '#/components/schemas/AnimeListItem'
+        - type: object
+          properties:
+            description: { type: string, nullable: true }
+            studios:
+              type: array
+              items: { $ref: '#/components/schemas/Studio' }
+            characters:
+              type: array
+              items: { $ref: '#/components/schemas/Character' }
+            rating: { $ref: '#/components/schemas/Rating' }
+            episodeCount: { type: integer }
+
+    Episode:
+      type: object
+      properties:
+        id: { type: integer }
+        anilistId: { type: integer, nullable: true }
+        animeId: { type: integer }
+        number: { type: integer }
+        title: { type: string, nullable: true }
+        titleJapanese: { type: string, nullable: true }
+        synopsis: { type: string, nullable: true }
+        thumbnailUrl: { type: string, format: uri, nullable: true }
+        durationSeconds: { type: integer, nullable: true }
+        airDate: { type: string, format: date, nullable: true }
+        isFiller: { type: boolean }
+        isRecap: { type: boolean }
+        videoUrl: { type: string, format: uri, nullable: true }
+
+    User:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        username: { type: string }
+        email: { type: string, format: email }
+        displayName: { type: string, nullable: true }
+        avatarUrl: { type: string, nullable: true }
+        role: { type: string, enum: [viewer, moderator, admin] }
+        createdAt: { type: string, format: date-time }
+
+    Tokens:
+      type: object
+      properties:
+        accessToken: { type: string }
+        refreshToken: { type: string }
+        tokenType: { type: string, example: Bearer }
+        expiresIn: { type: integer, description: Access token lifetime in seconds }
+
+    AuthResponse:
+      type: object
+      required: [user, tokens]
+      properties:
+        user: { $ref: '#/components/schemas/User' }
+        tokens: { $ref: '#/components/schemas/Tokens' }
+
+    RegisterRequest:
+      type: object
+      required: [username, email, password]
+      properties:
+        username: { type: string, minLength: 3, maxLength: 32, pattern: '^[A-Za-z0-9_]+$' }
+        email: { type: string, format: email, maxLength: 254 }
+        password: { type: string, minLength: 8, maxLength: 72, format: password }
+
+    LoginRequest:
+      type: object
+      required: [identifier, password]
+      properties:
+        identifier: { type: string, description: Email or username }
+        password: { type: string, format: password }
+
+    TokenRequest:
+      type: object
+      properties:
+        refreshToken: { type: string, description: Optional if the httpOnly refresh_token cookie is set }
+
+    AddFavoriteRequest:
+      type: object
+      description: Exactly one of the three target ids.
+      properties:
+        animeId: { type: integer, minimum: 1 }
+        characterId: { type: integer, minimum: 1 }
+        staffId: { type: integer, minimum: 1 }
+
+    Favorite:
+      type: object
+      properties:
+        id: { type: integer }
+        createdAt: { type: string, format: date-time }
+        type: { type: string, enum: [anime, character, staff] }
+        animeId: { type: integer, nullable: true }
+        characterId: { type: integer, nullable: true }
+        staffId: { type: integer, nullable: true }
+        anime:
+          type: object
+          nullable: true
+          properties:
+            id: { type: integer }
+            title: { type: string, nullable: true }
+            coverImageLarge: { type: string, nullable: true }
+            format: { type: string, nullable: true }
+            episodes: { type: integer, nullable: true }
+        character:
+          type: object
+          nullable: true
+          properties:
+            id: { type: integer }
+            nameFirst: { type: string }
+            nameLast: { type: string, nullable: true }
+            imageLarge: { type: string, nullable: true }
+        staff:
+          type: object
+          nullable: true
+          properties:
+            id: { type: integer }
+            nameFirst: { type: string }
+            nameLast: { type: string, nullable: true }
+            language: { type: string }
+            imageLarge: { type: string, nullable: true }
+
+    HistoryItem:
+      type: object
+      properties:
+        id: { type: integer }
+        watchedAt: { type: string, format: date-time }
+        progressSeconds: { type: integer, nullable: true }
+        durationSeconds: { type: integer, nullable: true }
+        completed: { type: boolean }
+        episodeId: { type: integer }
+        number: { type: integer }
+        episodeTitle: { type: string, nullable: true }
+        episodeThumbnail: { type: string, nullable: true }
+        animeId: { type: integer }
+        animeTitle: { type: string }
+        animeCoverImage: { type: string, nullable: true }
