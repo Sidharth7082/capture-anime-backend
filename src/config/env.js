@@ -36,6 +36,16 @@ const envSchema = z.object({
 
   CACHE_TTL_MS: z.coerce.number().int().min(0).default(60_000), // 0 disables
   CACHE_MAX_ENTRIES: z.coerce.number().int().positive().default(500),
+
+  // --- Anivexa streaming provider -------------------------------------------
+  // Self-hosted Anivexa API used for episode streams. The watch endpoints
+  // return a clear 503/502 when this is not configured or unreachable.
+  ANIVEXA_API_URL: z.string().url().optional(),
+  // Comma-separated provider names; order = failover order. Any provider in
+  // the list that Anivexa doesn't know is skipped.
+  ANIVEXA_PROVIDERS: z.string().default('reanime,anikoto,animegg,anineko,anidbapp,kaa'),
+  ANIVEXA_CACHE_TTL_MS: z.coerce.number().int().min(0).default(5 * 60 * 1000),
+  ANIVEXA_TIMEOUT_MS: z.coerce.number().int().positive().default(15_000),
 });
 
 const parsed = envSchema.safeParse(process.env);

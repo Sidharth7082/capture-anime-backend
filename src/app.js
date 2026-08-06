@@ -22,12 +22,15 @@ import { errorHandler } from './middleware/error-handler.js';
 import { createAuthRouter } from './modules/auth/auth.routes.js';
 import { createAnimeRouter, createEpisodesRouter } from './modules/anime/anime.routes.js';
 import { createUserRouter } from './modules/user/user.routes.js';
+import { createWatchRouter } from './modules/watch/watch.routes.js';
 import { createAuthRepository } from './modules/auth/auth.repository.js';
 import { createAuthService } from './modules/auth/auth.service.js';
 import { createAnimeRepository } from './modules/anime/anime.repository.js';
 import { createAnimeService } from './modules/anime/anime.service.js';
 import { createUserRepository } from './modules/user/user.repository.js';
 import { createUserService } from './modules/user/user.service.js';
+import { createWatchService } from './modules/watch/watch.service.js';
+import { AnivexaService } from './services/anivexa.js';
 
 const openapiSpec = YAML.parse(
   readFileSync(new URL('./openapi.yaml', import.meta.url), 'utf8'),
@@ -54,10 +57,11 @@ function corsOrigin() {
  * @param {object} deps.authService
  * @param {object} deps.animeService
  * @param {object} deps.userService
+ * @param {object} [deps.watchService]
  * @param {TtlCache} deps.cache
  * @param {object} [deps.authLimiter]
  */
-export function createApp({ authService, animeService, userService, cache, authLimiter, cacheTtlMs = env.CACHE_TTL_MS } = {}) {
+export function createApp({ authService, animeService, userService, watchService, cache, authLimiter, cacheTtlMs = env.CACHE_TTL_MS } = {}) {
   const app = express();
 
   app.set('trust proxy', trustProxySetting());
@@ -110,6 +114,9 @@ export function createApp({ authService, animeService, userService, cache, authL
   app.use('/api/anime', createAnimeRouter({ animeService, cache, cacheTtlMs }));
   app.use('/api/episodes', createEpisodesRouter({ animeService, cache, cacheTtlMs }));
   app.use('/api/user', createUserRouter({ userService }));
+  if (watchService) {
+    app.use('/api/watch', createWatchRouter({ watchService, cache, cacheTtlMs }));
+  }
 
   // --- OpenAPI ---------------------------------------------------------------
   // Exposes the full API surface — disabled by default in production unless
@@ -143,6 +150,7 @@ export function createProductionApp() {
   const authService = createAuthService({ repository: authRepository });
   const animeService = createAnimeService({ repository: animeRepository });
   const userService = createUserService({ repository: userRepository });
+  const watchService = createWatchService({ animeRepository, anivexa: new AnivexaService() });
 
-  return createApp({ authService, animeService, userService, cache });
+  return createApp({ authService, animeService, userService, watchService, cache });
 }

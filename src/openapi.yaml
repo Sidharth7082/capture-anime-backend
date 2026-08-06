@@ -441,6 +441,44 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
 
+
+  /api/watch/{animeId}/{episode}:
+    get:
+      tags: [Watch]
+      summary: Stream an episode through the Anivexa provider
+      description: >
+        Resolves the anime (by DB id) to its AniList id and returns playable
+        streams from the self-hosted Anivexa API. Without an explicit
+        provider, the configured providers are tried in order and the first
+        one with usable streams wins. Responses are cached briefly.
+      parameters:
+        - { name: animeId, in: path, required: true, schema: { type: integer, minimum: 1 }, description: DB anime id (same space as /api/anime/:id) }
+        - { name: episode, in: path, required: true, schema: { type: integer, minimum: 1 }, description: Episode number }
+        - { name: provider, in: query, required: false, schema: { type: string, example: reanime }, description: Force a specific provider (e.g. reanime, anikoto, animegg). Default: first working provider. }
+        - { name: audio, in: query, required: false, schema: { type: string, enum: [sub, dub], default: sub } }
+      responses:
+        '200':
+          description: Playable streams
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WatchResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404':
+          description: Anime not found or episode unavailable from any provider
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '502':
+          description: All streaming providers failed
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '503':
+          description: Streaming not configured (ANIVEXA_API_URL unset)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
 components:
   securitySchemes:
     BearerAuth:
@@ -743,3 +781,42 @@ components:
         animeId: { type: integer }
         animeTitle: { type: string }
         animeCoverImage: { type: string, nullable: true }
+
+    WatchResponse:
+      type: object
+      required: [provider, episode, audio, streams, subtitles, servers]
+      properties:
+        provider: { type: string, example: reanime }
+        episode: { type: integer, example: 1 }
+        audio: { type: string, enum: [sub, dub] }
+        streams:
+          type: array
+          items:
+            type: object
+            properties:
+              url: { type: string, description: Playable URL (HLS m3u8, mp4, or embed page) }
+              type: { type: string, enum: [hls, mp4, embed, hls-redirect, direct], example: hls }
+              server: { type: string, nullable: true }
+              embedUrl: { type: string, nullable: true }
+              referer: { type: string, nullable: true }
+              subtitles:
+                type: array
+                items: { $ref: '#/components/schemas/SubtitleTrack' }
+              priority: { type: integer, nullable: true }
+              isActive: { type: boolean, nullable: true }
+        subtitles:
+          type: array
+          items: { $ref: '#/components/schemas/SubtitleTrack' }
+        servers:
+          type: array
+          items: { type: string }
+          description: Distinct stream servers (e.g. HD-1)
+
+    SubtitleTrack:
+      type: object
+      properties:
+        url: { type: string }
+        label: { type: string }
+        srclang: { type: string, nullable: true }
+        default: { type: boolean }
+        source: { type: string, nullable: true }

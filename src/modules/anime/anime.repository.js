@@ -108,6 +108,16 @@ export function createAnimeRepository(pool) {
       return rows[0] ?? null;
     },
 
+    /** Lean lookup used by the streaming (watch) module to resolve a DB anime
+     *  id to its AniList id without pulling the whole row. */
+    async findAnilistId(id) {
+      const { rows } = await pool.query(
+        `SELECT a.anilist_id AS "anilistId" FROM anime a WHERE a.id = $1`,
+        [id],
+      );
+      return rows[0]?.anilistId ?? null;
+    },
+
     async findGenresByAnimeId(animeId) {
       const { rows } = await pool.query(
         `SELECT g.id, g.name
