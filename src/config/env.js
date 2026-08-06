@@ -44,8 +44,10 @@ const envSchema = z.object({
   // Comma-separated provider names; order = failover order. Any provider in
   // the list that Anivexa doesn't know is skipped.
   ANIVEXA_PROVIDERS: z.string().default('reanime,anikoto,animegg,anineko,anidbapp,kaa'),
-  ANIVEXA_CACHE_TTL_MS: z.coerce.number().int().min(0).default(5 * 60 * 1000),
+  ANIVEXA_CACHE_TTL_MS: z.coerce.number().int().min(0).default(30 * 60 * 1000),
   ANIVEXA_TIMEOUT_MS: z.coerce.number().int().positive().default(15_000),
+  ANIVEXA_MAX_PARALLEL: z.coerce.number().int().positive().max(10).default(3),
+  ANIVEXA_PREFETCH_EPISODES: z.coerce.number().int().min(0).max(50).default(3),
 });
 
 const parsed = envSchema.safeParse(process.env);

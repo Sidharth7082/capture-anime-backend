@@ -8,5 +8,12 @@ export function createWatchController(watchService) {
       const result = await watchService.watch(animeId, episode, { provider, audio });
       res.json(result);
     }),
+
+    prefetch: asyncHandler(async (req, res) => {
+      const { animeId } = req.params;
+      const count = req.query.count ? Number(req.query.count) : undefined;
+      const result = await watchService.prefetch(animeId, count);
+      res.json(result);
+    }),
   };
 }
