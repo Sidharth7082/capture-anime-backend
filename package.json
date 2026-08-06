@@ -1,0 +1,28 @@
+{
+  "name": "anime-stream-platform",
+  "version": "1.0.0",
+  "description": "PostgreSQL schema + AniList importer for an anime streaming platform",
+  "type": "module",
+  "private": true,
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "migrate": "node db/migrate.js up",
+    "migrate:down": "node db/migrate.js down",
+    "migrate:status": "node db/migrate.js status",
+    "migrate:create": "node db/migrate.js create",
+    "import": "node src/cli.js",
+    "import:anime": "node src/cli.js --type ANIME --sort POPULARITY_DESC",
+    "test:smoke": "node test/migrations.smoke.test.mjs",
+    "test:e2e": "node test/e2e.import.test.mjs"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "pg": "^8.13.1"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "^0.2.16",
+    "pg-gateway": "^0.3.0-beta.4"
+  }
+}
