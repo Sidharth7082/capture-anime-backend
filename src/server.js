@@ -36,6 +36,30 @@ const server = app.listen(env.PORT, () => {
   }
 });
 
+// --- HTTP server hardening: don't RST LAN clients on benign parser errors ---
+// Root cause of ERR_CONNECTION_ABORTED on remote devices: Node's default
+// clientError handler replies `HTTP/1.1 400 Bad Request` + RST to any benign
+// parser/socket error (segmented keep-alive, early EOF, timeout). Localhost
+// never hits it; real LAN clients do. Tune timeouts and close gracefully.
+server.headersTimeout = 65_000;
+server.requestTimeout = 65_000;
+server.keepAliveTimeout = 65_000;
+server.on('clientError', (err, socket) => {
+  const code = err?.code ?? 'UNKNOWN';
+  const benign = new Set([
+    'ECONNRESET', 'ETIMEDOUT', 'EPIPE',
+    'HPE_INVALID_EOF_STATE', 'HPE_INVALID_CONSTANT',
+    'HPE_INVALID_METHOD', 'HPE_INVALID_VERSION', 'HPE_CB_message_begin',
+  ]);
+  if (benign.has(code)) {
+    if (socket.writable) socket.end();
+    else socket.destroy();
+    return;
+  }
+  if (socket.writable) socket.end('HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n');
+  else socket.destroy();
+});
+
 // Housekeeping: prune expired refresh tokens (6h default). unref() keeps the
 // interval from holding the process open during shutdown.
 const pruner = setInterval(async () => {
