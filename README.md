@@ -41,6 +41,7 @@ capture-anime-backend/
 │       ├── run-import.ts       # CLI: one-shot anime import / enrichment
 │       ├── verify-catalog.ts   # catalog health checks (npm run catalog:verify)
 │       ├── jikan.ts            # Jikan v4 client (timeout, retries, 429-aware)
+│       ├── anilist.ts          # AniList GraphQL client (throttle, Retry-After, token)
 │       ├── database.ts         # pg pool wrapper (query, transaction, ping)
 │       ├── typesense.ts        # search index client + per-page sink
 │       ├── metrics.ts          # current/last run counters for /health
@@ -75,6 +76,7 @@ Fetcher ──► Normalizer ──► Validator ──► UpsertService ──�
 | **2. Metadata** | genres, studios, producers, licensors, themes, demographics | embedded in list items — same transaction as the anime row |
 | **3. Search** | Typesense index | flip `TYPESENSE_ENABLED=true`; per-page upsert of search docs |
 | **4. Enrichment** | characters, voice actors, staff, relations, recommendations, pictures, videos | per-anime detail endpoints (`GET /v4/anime/{id}/…`), own resume point |
+| **5. AniList (canonical)** | the authoritative anime row (banner, cover color, trailer, mean score, next airing, synopsis) | GraphQL `Page.media`; matches by `anilist_id` then `id_mal` — Jikan rows updated in place, never duplicated; incremental via `UPDATED_AT_DESC` + previous run cursor |
 
 Guarantees that make re-runs safe:
 
@@ -156,6 +158,7 @@ PostgreSQL ≥ 13, managed by a small SQL migration runner
 | `0010` | enrichment content: anime_staff, anime_relations, anime_recommendations, anime_pictures, anime_videos + `mal_id` on characters/staff |
 | `0011` | schema hardening: unique `id_mal`/`slug`, `last_synced_at` on every imported table |
 | `0012` | `anime.enrich_synced_at` — enrichment-only cursor for stale refresh |
+| `0013` | `anime.next_airing_at` — AniList-only field |
 
 **Canonical record** — one row per anime, enriched from multiple providers
 over time (Jikan today; AniList/TMDB planned as *enrichers* that only

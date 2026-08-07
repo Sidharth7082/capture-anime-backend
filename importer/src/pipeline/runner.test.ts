@@ -67,6 +67,9 @@ class FakeJobStore implements JobStore {
     this.lockCalls += 1;
     return async () => {};
   }
+  async getLastSyncAt(): Promise<number | null> {
+    return null;
+  }
 }
 
 function makeFetcher(pages: Raw[][]) {
@@ -87,7 +90,7 @@ function makeUpsert() {
   const port: UpsertPort<NormalizedAnime> = {
     async upsert(row) {
       upserted.push(row);
-      return row.idMal % 2 === 0 ? "updated" : "inserted";
+      return row.idMal != null && row.idMal % 2 === 0 ? "updated" : "inserted";
     },
   };
   return { port, upserted };

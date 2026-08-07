@@ -58,6 +58,18 @@ export class PostgresJobStore implements JobStore {
   async acquireRunLock(source: string): Promise<() => Promise<void>> {
     return this.db.advisoryLock(`import:${source}`);
   }
+
+  /** Last COMPLETED run's finished_at (epoch seconds) — incremental cursor. */
+  async getLastSyncAt(source: string): Promise<number | null> {
+    const res = await this.db.query<{ finished_at: string | null }>(
+      `SELECT finished_at FROM import_jobs
+       WHERE source = $1 AND status = 'completed'
+       ORDER BY finished_at DESC NULLS LAST LIMIT 1`,
+      [source],
+    );
+    const ts = res.rows[0]?.finished_at;
+    return ts ? Math.floor(new Date(ts).getTime() / 1000) : null;
+  }
 }
 
 export function createPostgresJobStore(db: Database): PostgresJobStore {
@@ -78,6 +90,9 @@ export function createNoopJobStore(): JobStore {
     async markFinished() {},
     async acquireRunLock() {
       return async () => {};
+    },
+    async getLastSyncAt() {
+      return null;
     },
   };
 }

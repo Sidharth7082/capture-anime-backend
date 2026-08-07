@@ -62,6 +62,8 @@ export interface JobStore {
    * function that must ALWAYS be called (runner uses try/finally).
    */
   acquireRunLock(source: string): Promise<() => Promise<void>>;
+  /** Epoch seconds when the source last completed (incremental cursor). */
+  getLastSyncAt(source: string): Promise<number | null>;
 }
 
 // --- runner ------------------------------------------------------------------
@@ -110,6 +112,8 @@ export interface PipelineDeps<T, R> {
 export interface MetadataRef {
   malId: number;
   name: string;
+  /** AniList studios only: whether this is the animation studio. */
+  isAnimationStudio?: boolean;
 }
 
 // --- Stage 4 enrichment (per-anime detail data) -----------------------------
@@ -183,7 +187,9 @@ export interface NormalizedAnimeEnrichment {
 
 /** Normalized row matching the `anime` table columns (Stage 1 subset). */
 export interface NormalizedAnime {
-  idMal: number;
+  /** MAL id — required for Jikan rows; AniList rows may carry only anilistId. */
+  idMal: number | null;
+  anilistId?: number | null;
   titleRomaji: string | null;
   titleEnglish: string | null;
   titleNative: string | null;
@@ -212,4 +218,12 @@ export interface NormalizedAnime {
   studios: MetadataRef[];
   producers: MetadataRef[];
   licensors: MetadataRef[];
+  // --- AniList-canonical fields (Jikan rows leave these unset) ----------------
+  bannerImage?: string | null;
+  coverImageColor?: string | null;
+  trailerId?: string | null;
+  trailerSite?: string | null;
+  trailerThumbnail?: string | null;
+  /** ISO timestamp of the next airing episode (AniList only). */
+  nextAiringAt?: string | null;
 }

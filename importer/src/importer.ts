@@ -13,14 +13,16 @@
  * New data sources only add a fetcher + normalizer; the rest is reused.
  */
 import type { JikanClient } from "./jikan.js";
+import type { AniListClient } from "./anilist.js";
 import type { Database } from "./database.js";
 import type { TypesenseClient } from "./typesense.js";
 import { createNoopSink } from "./typesense.js";
 import type { Metrics } from "./metrics.js";
-import { createJikanAnimeFetcher, createJikanEnrichFetcher } from "./pipeline/fetchers.js";
-import { normalizeAnimeItem, normalizeAnimeEnrichment, type JikanAnime, type JikanEnrichmentBundle } from "./pipeline/normalizers.js";
+import { createJikanAnimeFetcher, createJikanEnrichFetcher, createAniListFetcher } from "./pipeline/fetchers.js";
+import { normalizeAnimeItem, normalizeAnimeEnrichment, normalizeAniListItem, type JikanAnime, type JikanEnrichmentBundle, type AniListMedia } from "./pipeline/normalizers.js";
 import { validateAnimeRow, validateAnimeEnrichment } from "./pipeline/validator.js";
 import { createAnimeUpsertService } from "./pipeline/upsert-service.js";
+import { createAniListUpsertService } from "./pipeline/anilist-upsert-service.js";
 import { createAnimeEnrichUpsertService } from "./pipeline/enrich-upsert-service.js";
 import { createPostgresJobStore } from "./pipeline/job-store.js";
 import { runPipeline } from "./pipeline/runner.js";
@@ -38,6 +40,11 @@ export interface ImportDeps {
   enrichBatchSize?: number;
   /** Only enrich anime not synced in this many days (0 = all). */
   enrichStaleDays?: number;
+  /** AniList canonical sync (null/absent disables the source). */
+  anilist?: AniListClient | null;
+  /** Incremental fetch cursor: only media updated after this epoch second. */
+  anilistUpdatedAtGreater?: number | null;
+  anilistPerPage?: number;
   logger?: Pick<Console, "debug" | "info" | "warn" | "error">;
 }
 
@@ -180,11 +187,68 @@ export class Importer {
   }
 
   /**
-   * Scheduled entrypoint (called by the scheduler). Runs the anime import,
-   * then enriches the (possibly updated) catalog.
+   * AniList canonical sync. Matches the existing catalog by anilist_id then
+   * id_mal, so Jikan-imported rows are updated in place (their anilist_id
+   * gets filled) — never a duplicate. Incremental by default: only media
+   * updated since the previous completed run are fetched (pass full to
+   * ignore the cursor).
+   */
+  async importAniList(options: AnimeImportOptions & { full?: boolean } = {}): Promise<RunResult> {
+    if (!this.deps.anilist || !this.deps.db) {
+      const empty: RunResult = { ok: true, fetched: 0, inserted: 0, updated: 0, failed: 0, summary: "anilist-anime: not configured" };
+      return empty;
+    }
+    this.cancelled = false;
+    const metrics = this.deps.metrics;
+    metrics?.recordStart("anilist-anime");
+    let cursor: number | null = null;
+    if (!options.full) {
+      cursor = await this.jobs.getLastSyncAt("anilist-anime");
+    }
+    try {
+      const result = await runPipeline<AniListMedia, NormalizedAnime>(
+        {
+          source: "anilist-anime",
+          fetcher: createAniListFetcher({
+            client: this.deps.anilist,
+            updatedAtGreater: cursor,
+            perPage: this.deps.anilistPerPage ?? 50,
+          }),
+          normalizer: normalizeAniListItem,
+          validator: validateAnimeRow,
+          upsert: createAniListUpsertService(this.deps.db),
+          jobs: this.jobs,
+          sink: createNoopSink(this.logger as Pick<Console, "debug" | "info" | "warn" | "error">) as Sink<NormalizedAnime>,
+          pageDelayMs: 0,
+          isCancelled: () => this.cancelled,
+          onProgress: (page, counts) => metrics?.recordPage("anilist-anime", page, counts),
+          logger: this.logger,
+        },
+        options,
+      );
+      metrics?.recordEnd("anilist-anime", result, result.ok ? "completed" : "failed");
+      return result;
+    } catch (err) {
+      metrics?.recordEnd("anilist-anime", {
+        ok: false,
+        fetched: 0,
+        inserted: 0,
+        updated: 0,
+        failed: 0,
+        summary: String(err),
+      }, "failed", String(err));
+      throw err;
+    }
+  }
+
+  /**
+   * Scheduled entrypoint (called by the scheduler). Runs the AniList
+   * canonical sync (when enabled), then the Jikan catalogue import (fills
+   * MAL ids + metadata), then the enrichment stage.
    */
   async run(): Promise<RunResult[]> {
     const results: RunResult[] = [];
+    if (this.deps.anilist) results.push(await this.importAniList());
     results.push(await this.importAnime());
     results.push(await this.enrichAnime());
     return results;

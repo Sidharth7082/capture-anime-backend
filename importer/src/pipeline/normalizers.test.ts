@@ -4,7 +4,8 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { normalizeAnimeItem, normalizeAnimeEnrichment, makeSlug, type JikanAnime } from "./normalizers.js";
+import { normalizeAnimeItem, normalizeAnimeEnrichment, normalizeAniListItem, makeSlug, type JikanAnime } from "./normalizers.js";
+import { validateAnimeRow } from "./validator.js";
 
 const BASE: JikanAnime = {
   mal_id: 16498,
@@ -240,4 +241,58 @@ test("makeSlug kebab-cases titles and falls back to anime-{malId}", () => {
   assert.equal(makeSlug(null, 5), "anime-5");
   assert.equal(makeSlug("   ", 5), "anime-5");
   assert.equal(makeSlug("a".repeat(200), 7).length <= 120, true);
+});
+
+test("AniList canonical item maps to the platform row", () => {
+  const row = normalizeAniListItem({
+    id: 12345,
+    idMal: 1,
+    title: { romaji: "Cowboy Bebop", english: "Cowboy Bebop", native: "カウボーイビバップ" },
+    synonyms: ["CB"],
+    description: "<p>Space jazz.</p>",
+    format: "TV",
+    status: "FINISHED",
+    episodes: 26,
+    duration: 24,
+    startDate: { year: 1998, month: 4, day: 3 },
+    endDate: { year: 1999, month: 4, day: 23 },
+    season: "SPRING",
+    seasonYear: 1998,
+    averageScore: 86,
+    meanScore: 85,
+    popularity: 500000,
+    favourites: 10000,
+    source: "ORIGINAL",
+    isAdult: false,
+    coverImage: { extraLarge: "http://x/xl.jpg", large: "http://x/l.jpg", medium: "http://x/m.jpg", color: "#123456" },
+    bannerImage: "http://x/b.jpg",
+    trailer: { id: "abc", site: "youtube", thumbnail: "http://x/t.jpg" },
+    genres: ["Action", "Sci-Fi"],
+    studios: { nodes: [{ id: 14, name: "Sunrise", isAnimationStudio: true }, { id: 99, name: "Bandai", isAnimationStudio: false }] },
+    nextAiringEpisode: { airingAt: 1700000000, episode: 27 },
+  });
+  assert.equal(row.anilistId, 12345);
+  assert.equal(row.idMal, 1);
+  assert.equal(row.meanScore, 85);
+  assert.equal(row.bannerImage, "http://x/b.jpg");
+  assert.equal(row.coverImageColor, "#123456");
+  assert.equal(row.trailerId, "abc");
+  assert.equal(row.trailerSite, "youtube");
+  assert.equal(row.nextAiringAt, new Date(1700000000 * 1000).toISOString());
+  assert.deepEqual(row.genres.map((g) => g.name), ["Action", "Sci-Fi"]);
+  assert.deepEqual(row.studios, [
+    { malId: 14, name: "Sunrise", isAnimationStudio: true },
+    { malId: 99, name: "Bandai", isAnimationStudio: false },
+  ]);
+  assert.equal(row.startDate, "1998-04-03");
+  assert.equal(row.endDate, "1999-04-23");
+});
+
+test("AniList item without idMal still normalizes (matched by anilistId)", () => {
+  const row = normalizeAniListItem({ id: 7, title: { romaji: "Only on AniList" } });
+  assert.equal(row.idMal, null);
+  assert.equal(row.anilistId, 7);
+  assert.equal(row.nextAiringAt, null);
+  const check = validateAnimeRow(row);
+  assert.equal(check.ok, true, "row with only anilistId is valid");
 });

@@ -110,3 +110,92 @@ export function createJikanEnrichFetcher(options: JikanEnrichFetcherOptions): Fe
     },
   };
 }
+
+// --- AniList canonical fetcher -----------------------------------------------
+
+import type { AniListClient } from "../anilist.js";
+import type { AniListMedia } from "./normalizers.js";
+
+export interface AniListFetcherOptions {
+  client: Pick<AniListClient, "query">;
+  /** Incremental cursor: only media updated after this epoch second. */
+  updatedAtGreater?: number | null;
+  perPage?: number;
+}
+
+export const ANILIST_PAGE_QUERY = /* GraphQL */ `
+  query ($page: Int, $perPage: Int, $sort: [MediaSort]) {
+    Page(page: $page, perPage: $perPage) {
+      pageInfo { hasNextPage }
+      media(type: ANIME, sort: $sort) {
+        id
+        idMal
+        title { romaji english native }
+        synonyms
+        description
+        format
+        status
+        episodes
+        duration
+        startDate { year month day }
+        endDate { year month day }
+        season
+        seasonYear
+        averageScore
+        meanScore
+        popularity
+        favourites
+        source
+        isAdult
+        coverImage { extraLarge large medium color }
+        bannerImage
+        trailer { id site thumbnail }
+        genres
+        studios { nodes { id name isAnimationStudio } }
+        nextAiringEpisode { airingAt episode }
+        updatedAt
+      }
+    }
+  }
+`;
+
+interface AniListPageResult {
+  Page?: {
+    pageInfo?: { hasNextPage?: boolean | null };
+    media?: AniListMedia[] | null;
+  } | null;
+}
+
+/**
+ * Paginated AniList catalog fetcher. AniList has no updatedAt FILTER, but it
+ * sorts by UPDATED_AT_DESC — so incremental sync pages the catalog in that
+ * order and stops (hasNextPage=false) as soon as it hits a media item whose
+ * updatedAt predates the cursor. The remaining pages are re-fetched on the
+ * next incremental run, not skipped.
+ */
+export function createAniListFetcher(options: AniListFetcherOptions): Fetcher<AniListMedia> {
+  const perPage = options.perPage ?? 50;
+  const cursor = options.updatedAtGreater ?? null;
+  return {
+    source: "anilist-anime",
+    async fetchPage(page: number): Promise<FetchedPage<AniListMedia>> {
+      const data = await options.client.query<AniListPageResult>(ANILIST_PAGE_QUERY, {
+        page,
+        perPage,
+        sort: cursor != null ? ["UPDATED_AT_DESC"] : ["ID"],
+      });
+      let items = data.Page?.media ?? [];
+      let hasNextPage = data.Page?.pageInfo?.hasNextPage ?? false;
+      if (cursor != null) {
+        // Sorted newest-first: everything from the first stale item onward
+        // was already synced — stop here (the rest is a later incremental run).
+        const staleIndex = items.findIndex((m) => (m.updatedAt ?? 0) < cursor);
+        if (staleIndex >= 0) {
+          items = items.slice(0, staleIndex);
+          hasNextPage = false;
+        }
+      }
+      return { items, hasNextPage };
+    },
+  };
+}

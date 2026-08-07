@@ -380,3 +380,100 @@ export function makeSlug(title: string | null | undefined, idMal: number): strin
     .replace(/-{2,}/g, "-");
   return (base && base.length > 0 ? base : `anime-${idMal}`).slice(0, 120);
 }
+
+// --- AniList canonical normalizer --------------------------------------------
+
+/** AniList Media shape (the fields we consume; enums match the DB exactly). */
+export interface AniListMedia {
+  id: number;
+  idMal?: number | null;
+  title?: { romaji?: string | null; english?: string | null; native?: string | null } | null;
+  synonyms?: string[] | null;
+  description?: string | null; // HTML, AniList-style
+  format?: string | null; // TV | TV_SHORT | MOVIE | SPECIAL | OVA | ONA | MUSIC
+  status?: string | null; // FINISHED | RELEASING | NOT_YET_RELEASED | CANCELLED | HIATUS
+  episodes?: number | null;
+  duration?: number | null; // minutes per episode
+  startDate?: { year?: number | null; month?: number | null; day?: number | null } | null;
+  endDate?: { year?: number | null; month?: number | null; day?: number | null } | null;
+  season?: string | null; // WINTER | SPRING | SUMMER | FALL
+  seasonYear?: number | null;
+  averageScore?: number | null; // 0..100
+  meanScore?: number | null; // 0..100
+  popularity?: number | null;
+  favourites?: number | null;
+  source?: string | null; // matches media_source enum
+  isAdult?: boolean | null;
+  coverImage?: {
+    extraLarge?: string | null;
+    large?: string | null;
+    medium?: string | null;
+    color?: string | null;
+  } | null;
+  bannerImage?: string | null;
+  trailer?: { id?: string | null; site?: string | null; thumbnail?: string | null } | null;
+  genres?: string[] | null;
+  studios?: {
+    nodes?: Array<{ id?: number | null; name?: string | null; isAnimationStudio?: boolean | null } | null> | null;
+  } | null;
+  nextAiringEpisode?: { airingAt?: number | null; episode?: number | null } | null;
+  /** AniList updatedAt (epoch) — used by the incremental cursor. */
+  updatedAt?: number | null;
+}
+
+function anilistDate(d: AniListMedia["startDate"]): string | null {
+  if (!d?.year) return null;
+  const month = d.month != null ? String(d.month).padStart(2, "0") : "01";
+  const day = d.day != null ? String(d.day).padStart(2, "0") : "01";
+  return `${d.year}-${month}-${day}`;
+}
+
+function anilistScore(score: number | null | undefined): number | null {
+  if (score == null) return null;
+  return Math.max(0, Math.min(100, Math.round(score)));
+}
+
+/** Map one AniList Media item into the canonical platform row. */
+export function normalizeAniListItem(media: AniListMedia): NormalizedAnime {
+  return {
+    idMal: media.idMal ?? null,
+    titleRomaji: media.title?.romaji ?? null,
+    titleEnglish: media.title?.english ?? null,
+    titleNative: media.title?.native ?? null,
+    synonyms: Array.isArray(media.synonyms) ? media.synonyms.filter(Boolean) : [],
+    description: media.description ?? null,
+    format: media.format ?? null,
+    status: media.status ?? null,
+    episodes: media.episodes != null ? Math.max(0, media.episodes) : null,
+    durationMinutes: media.duration != null ? Math.max(0, media.duration) : null,
+    startDate: anilistDate(media.startDate),
+    endDate: anilistDate(media.endDate),
+    season: media.season ?? null,
+    seasonYear: media.seasonYear != null ? Math.max(1917, Math.min(2100, media.seasonYear)) : null,
+    averageScore: anilistScore(media.averageScore),
+    meanScore: anilistScore(media.meanScore),
+    popularity: media.popularity != null ? Math.max(0, media.popularity) : null,
+    favourites: media.favourites != null ? Math.max(0, media.favourites) : null,
+    source: media.source ?? null,
+    isAdult: media.isAdult ?? false,
+    coverImageLarge: media.coverImage?.extraLarge ?? media.coverImage?.large ?? null,
+    coverImageMedium: media.coverImage?.medium ?? media.coverImage?.large ?? null,
+    genres: (media.genres ?? [])
+      .filter((g): g is string => typeof g === "string" && g.length > 0)
+      .map((name) => ({ name } as MetadataRef)), // AniList genres carry no MAL id
+    themes: [],
+    demographics: [],
+    studios: (media.studios?.nodes ?? [])
+      .filter((s): s is { id: number; name: string; isAnimationStudio?: boolean | null } => !!s && s.id != null && !!s.name)
+      .map((s) => ({ malId: s.id, name: s.name, isAnimationStudio: s.isAnimationStudio ?? false })),
+    producers: [],
+    licensors: [],
+    anilistId: media.id,
+    bannerImage: media.bannerImage ?? null,
+    coverImageColor: media.coverImage?.color ?? null,
+    trailerId: media.trailer?.id ?? null,
+    trailerSite: media.trailer?.site ?? null,
+    trailerThumbnail: media.trailer?.thumbnail ?? null,
+    nextAiringAt: media.nextAiringEpisode?.airingAt != null ? new Date(media.nextAiringEpisode.airingAt * 1000).toISOString() : null,
+  };
+}

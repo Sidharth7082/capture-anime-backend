@@ -152,6 +152,7 @@ FROM import_jobs;
 >   `updated_at` + `last_synced_at` on every imported table
 > - `0012_enrichment_sync_cursor` — `anime.enrich_synced_at`, so
 >   `ENRICH_STALE_DAYS` measures the last enrichment, not the last catalog run
+> - `0013_next_airing_at` — `anime.next_airing_at` (AniList-only field)
 
 ### Sync timestamps & stale refresh
 
@@ -219,6 +220,32 @@ runner feeds every completed page into the sink, which:
 ```bash
 curl http://localhost:9090/health
 # {"status":"ok","uptimeSeconds":…,"import":{…},"jobs":[…]}
+```
+
+### AniList canonical sync
+
+`npm run import:anilist` makes AniList the source of truth for the anime
+**row**. It matches the existing catalog by `anilist_id` first, then by
+`id_mal` — anime imported from Jikan are **updated in place** and their
+`anilist_id` is backfilled; a re-run can never insert a duplicate (unique
+constraints on both keys). Jikan keeps filling MAL ids + metadata, and the
+enrichment stage keeps filling characters/staff/etc.
+
+- Brings fields Jikan lacks: `banner_image`, `cover_image_color`,
+  `trailer_*`, `mean_score`, `next_airing_at`, plus a canonical description.
+- Genres resolve by name (AniList genres carry no MAL id); studios by
+  AniList id (with `is_animation_studio`).
+- **Incremental by default**: AniList has no `updatedAt` filter, so the
+  fetcher pages `sort: UPDATED_AT_DESC` and stops at the first item whose
+  `updatedAt` predates the previous completed run (cursor from
+  `import_jobs.finished_at`). `--full` re-syncs everything.
+- Enable in the daemon scheduler with `ANILIST_ENABLED=true` (optionally
+  `ANILIST_ACCESS_TOKEN` for a higher API quota).
+
+```bash
+npm run import:anilist -- --limit 200    # test run
+npm run import:anilist                   # full canonical sync (resumes)
+npm run import:anilist -- --full         # ignore the incremental cursor
 ```
 
 ### Catalog verification

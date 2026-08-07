@@ -14,6 +14,7 @@
     "import:anime": "tsx src/run-import.ts",
     "import:enrich": "tsx src/run-import.ts --enrich",
     "verify-catalog": "tsx src/verify-catalog.ts",
+    "import:anilist": "tsx src/run-import.ts --anilist",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "tsx --test \"src/**/*.test.ts\" \"src/*.test.ts\""
   },

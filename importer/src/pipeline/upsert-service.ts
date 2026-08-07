@@ -132,13 +132,17 @@ export class AnimeUpsertService implements UpsertPort<NormalizedAnime> {
 
   /** Upsert one anime + its metadata by mal_id (atomic). Returns 'inserted' | 'updated'. */
   async upsert(row: NormalizedAnime): Promise<"inserted" | "updated"> {
+    // The Jikan source always carries id_mal; rows without one are handled by
+    // the AniList source (matched by anilistId), never here.
+    if (row.idMal == null) return "updated" as const;
+    const idMal = row.idMal;
     return this.db.transaction(async (client) => {
       const existing = await client.query<{ id: number; slug: string | null }>(
         "SELECT id, slug FROM anime WHERE id_mal = $1 ORDER BY id LIMIT 1",
-        [row.idMal],
+        [idMal],
       );
       const existingRow = existing.rows[0];
-      const base = makeSlug(row.titleRomaji ?? row.titleEnglish, row.idMal);
+      const base = makeSlug(row.titleRomaji ?? row.titleEnglish, idMal);
 
       let animeId: number;
       let outcome: "inserted" | "updated";

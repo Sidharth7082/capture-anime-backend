@@ -117,3 +117,9 @@ test("enrichment validator rejects a row where every endpoint failed", () => {
   assert.equal(check.ok, false);
   if (!check.ok) assert.match(check.reason, /all endpoints failed/);
 });
+
+test("anime row without any external id is rejected", () => {
+  const row = normalizeAnimeItem(VALID_ITEM);
+  const bad = validateAnimeRow({ ...row, idMal: null });
+  assert.equal(bad.ok, false);
+});

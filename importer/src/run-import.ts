@@ -35,9 +35,12 @@ const maxPages = argNumber("--maxPages");
 const dryRun = args.includes("--dry-run");
 const reset = args.includes("--reset");
 const enrich = args.includes("--enrich");
+const anilist = args.includes("--anilist");
+const full = args.includes("--full");
 if (limit != null) logger.info(`[cli] limit=${limit} items`);
 if (maxPages != null) logger.info(`[cli] maxPages=${maxPages}`);
 if (enrich) logger.info("[cli] mode=enrich (characters, staff, relations, recommendations, pictures, videos)");
+if (anilist) logger.info(`[cli] mode=anilist (canonical sync${full ? ", FULL (ignore incremental cursor)" : ", incremental"})`);
 if (dryRun) logger.warn("[cli] DRY-RUN: fetching + normalizing only, no database writes");
 if (reset) logger.warn("[cli] RESET: ignoring the saved resume point");
 
@@ -79,9 +82,11 @@ process.on("SIGTERM", () => {
 
 // --- run --------------------------------------------------------------------
 try {
-  const result = enrich
-    ? await importer.enrichAnime({ limit, maxPages, dryRun, reset })
-    : await importer.importAnime({ limit, maxPages, dryRun, reset });
+  const result = anilist
+    ? await importer.importAniList({ limit, maxPages, dryRun, reset, full })
+    : enrich
+      ? await importer.enrichAnime({ limit, maxPages, dryRun, reset })
+      : await importer.importAnime({ limit, maxPages, dryRun, reset });
   logger.info(`[cli] done — ${result.summary}`);
   console.log(JSON.stringify(result, null, 2));
   process.exit(result.ok ? 0 : 1);

@@ -8,6 +8,7 @@
 import "dotenv/config";
 import { z } from "zod";
 import { createJikanClient, type JikanClient } from "./jikan.js";
+import { createAniListClient, type AniListClient } from "./anilist.js";
 import { createDatabase, type Database } from "./database.js";
 import { createTypesense, type TypesenseClient } from "./typesense.js";
 import { createImporter } from "./importer.js";
@@ -37,6 +38,12 @@ const envSchema = z.object({
   TYPESENSE_URL: z.string().url().optional(),
   TYPESENSE_API_KEY: z.string().min(1).optional(),
   TYPESENSE_COLLECTION: z.string().min(1).default("anime"),
+
+  ANILIST_ENABLED: z.enum(["true", "false"]).default("false"),
+  ANILIST_ENDPOINT: z.string().url().default("https://graphql.anilist.co"),
+  ANILIST_ACCESS_TOKEN: z.string().min(1).optional(),
+  ANILIST_PER_PAGE: z.coerce.number().int().min(1).max(100).default(50),
+  ANILIST_MIN_INTERVAL_MS: z.coerce.number().int().min(0).default(450),
 
   RUN_ON_START: z.enum(["true", "false"]).default("true"),
   SCHEDULER_ENABLED: z.enum(["true", "false"]).default("true"),
@@ -127,6 +134,13 @@ async function main(): Promise<void> {
     logger,
   });
 
+  const anilist: AniListClient | null = env.ANILIST_ENABLED === "true" ? createAniListClient({
+    endpoint: env.ANILIST_ENDPOINT,
+    accessToken: env.ANILIST_ACCESS_TOKEN,
+    minIntervalMs: env.ANILIST_MIN_INTERVAL_MS,
+    logger,
+  }) : null;
+
   const importer = createImporter({
     jikan,
     db,
@@ -135,6 +149,8 @@ async function main(): Promise<void> {
     pageDelayMs: env.JIKAN_PAGE_DELAY_MS,
     enrichBatchSize: env.ENRICH_BATCH_SIZE,
     enrichStaleDays: env.ENRICH_STALE_DAYS,
+    anilist: anilist,
+    anilistPerPage: env.ANILIST_PER_PAGE,
     logger,
   });
 
