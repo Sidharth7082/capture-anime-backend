@@ -49,6 +49,7 @@ class FakeJobStore implements JobStore {
   started: { source: string; resumePage: number } | null = null;
   pages: Array<{ source: string; page: number; total: number }> = [];
   finished: { source: string; status: string; error: string | null } | null = null;
+  lockCalls = 0;
 
   async getResumePage(): Promise<number> {
     return this.resumePage;
@@ -61,6 +62,10 @@ class FakeJobStore implements JobStore {
   }
   async markFinished(source: string, status: "completed" | "failed", error?: string | null): Promise<void> {
     this.finished = { source, status, error: error ?? null };
+  }
+  async acquireRunLock(): Promise<() => Promise<void>> {
+    this.lockCalls += 1;
+    return async () => {};
   }
 }
 
@@ -161,7 +166,7 @@ test("reset ignores the resume point", async () => {
   assert.deepEqual(jobs.pages.map((p) => p.page), [1, 2]);
 });
 
-test("limit stops the run and marks completion", async () => {
+test("limit stops the run at a page boundary (pages are processed atomically)", async () => {
   const fetcher = makeFetcher([[{ id: 1 }, { id: 2 }, { id: 3 }], [{ id: 4 }]]);
   const jobs = new FakeJobStore();
 
@@ -176,7 +181,11 @@ test("limit stops the run and marks completion", async () => {
     logger: silent(),
   }, { limit: 2 });
 
-  assert.equal(result.fetched, 2);
+  // The limit is a soft cap enforced between pages: page 1 (3 items) is
+  // processed whole so no page is ever left half-done at the resume point.
+  assert.equal(result.fetched, 3);
+  assert.equal(result.summary.includes("limit"), true);
+  assert.deepEqual(jobs.pages.map((p) => p.page), [1]);
   assert.equal(jobs.finished?.status, "completed");
 });
 
@@ -251,4 +260,128 @@ test("cancellation stops between pages and marks the job failed", async () => {
   assert.equal(result.ok, false);
   assert.equal(jobs.finished?.status, "failed");
   assert.equal(jobs.finished?.error, "cancelled by signal");
+});
+
+test("mid-page cancellation does NOT advance the resume point", async () => {
+  let cancelled = false;
+  const fetcher = {
+    source: "test-source",
+    async fetchPage(page: number): Promise<FetchedPage<Raw>> {
+      return { items: [{ id: page * 10 }, { id: page * 10 + 1 }], hasNextPage: true };
+    },
+  };
+  const jobs = new FakeJobStore();
+  // Cancel while page 2 is being processed (after its first item).
+  let itemsSeen = 0;
+  const ups = {
+    port: {
+      async upsert(row: NormalizedAnime) {
+        itemsSeen += 1;
+        if (itemsSeen === 3) cancelled = true; // mid page 2
+        return "updated" as const;
+      },
+    },
+  };
+
+  const result = await runPipeline<Raw, NormalizedAnime>({
+    source: "test-source",
+    fetcher,
+    normalizer: toRow,
+    validator: (r) => ({ ok: true, row: r }),
+    upsert: ups.port,
+    jobs,
+    sink: { async ingest() {} },
+    isCancelled: () => cancelled,
+    logger: silent(),
+  });
+
+  assert.equal(result.ok, false);
+  // Only page 1 was fully processed; page 2 must NOT be in the resume point.
+  assert.deepEqual(jobs.pages.map((p) => p.page), [1], "cancelled page is not marked complete");
+  assert.equal(jobs.finished?.status, "failed");
+});
+
+test("a sink (Typesense) failure does not abort the run and the page is retried", async () => {
+  const fetcher = makeFetcher([[{ id: 1 }], [{ id: 2 }], []]);
+  const jobs = new FakeJobStore();
+  const ups = makeUpsert();
+  let ingestCalls = 0;
+
+  const result = await runPipeline<Raw, NormalizedAnime>({
+    source: "test-source",
+    fetcher,
+    normalizer: toRow,
+    validator: (r) => ({ ok: true, row: r }),
+    upsert: ups.port,
+    jobs,
+    sink: {
+      async ingest() {
+        ingestCalls += 1;
+        throw new Error("typesense down");
+      },
+    },
+    logger: silent(),
+  });
+
+  assert.equal(ingestCalls, 2, "every page reaches the sink");
+  assert.equal(result.ok, false, "run reports failure so health shows the index is behind");
+  assert.equal(ups.upserted.length, 2, "DB rows were still written");
+  assert.equal(jobs.pages.length, 0, "resume point NOT advanced — page will be replayed (idempotent)");
+  assert.equal(jobs.finished?.status, "failed");
+  assert.match(jobs.finished?.error ?? "", /sink failed/);
+});
+
+test("run lock is acquired and released around the run", async () => {
+  const fetcher = makeFetcher([[{ id: 1 }], []]);
+  const jobs = new FakeJobStore();
+  let released = false;
+  const original = jobs.acquireRunLock.bind(jobs);
+  jobs.acquireRunLock = async () => {
+    const release = await original();
+    return async () => {
+      released = true;
+      await release();
+    };
+  };
+
+  await runPipeline<Raw, NormalizedAnime>({
+    source: "test-source",
+    fetcher,
+    normalizer: toRow,
+    validator: (r) => ({ ok: true, row: r }),
+    upsert: makeUpsert().port,
+    jobs,
+    sink: { async ingest() {} },
+    logger: silent(),
+  });
+
+  assert.equal(jobs.lockCalls, 1);
+  assert.equal(released, true, "lock released after the run");
+});
+
+test("the sink only receives rows that were persisted (no failed-upsert rows)", async () => {
+  const fetcher = makeFetcher([[{ id: 1 }, { id: 2 }]]);
+  const jobs = new FakeJobStore();
+  let received: NormalizedAnime[] = [];
+  const ups = {
+    port: {
+      async upsert(row: NormalizedAnime) {
+        if (row.idMal === 2) throw new Error("db write failed");
+        return "inserted" as const;
+      },
+    },
+  };
+
+  await runPipeline<Raw, NormalizedAnime>({
+    source: "test-source",
+    fetcher,
+    normalizer: toRow,
+    validator: (r) => ({ ok: true, row: r }),
+    upsert: ups.port,
+    jobs,
+    sink: { async ingest(rows) { received = rows; } },
+    logger: silent(),
+  });
+
+  assert.deepEqual(received.map((r) => r.idMal), [1], "failed upsert row not fed to the sink");
 });

@@ -94,7 +94,8 @@ export class JikanClient {
           }
           if (status === 429) {
             this.logger.warn(`[jikan] rate limited on ${path}, backing off (attempt ${attempt + 1})`);
-            await delay(backoffMs(attempt));
+            const retryAfter = parseRetryAfter(err.response?.headers?.["retry-after"]);
+            await delay(retryAfter ?? backoffMs(attempt));
             continue;
           }
         }
@@ -117,7 +118,20 @@ function delay(ms: number): Promise<void> {
 }
 
 function backoffMs(attempt: number): number {
-  return 250 * 2 ** Math.min(attempt, 5);
+  const base = 250 * 2 ** Math.min(attempt, 5);
+  // ±25% jitter de-synchronizes concurrent retries (thundering-herd waves
+  // against the rate limiter), capped so a run never stalls for minutes.
+  return Math.min(60_000, Math.round(base * (0.75 + Math.random() * 0.5)));
+}
+
+/** Retry-After may be delta-seconds or an HTTP-date; null when absent/garbage. */
+function parseRetryAfter(value: unknown): number | null {
+  if (typeof value !== "string") return null;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds) && seconds >= 0) return Math.min(120_000, seconds * 1000);
+  const date = new Date(value).getTime();
+  if (!Number.isNaN(date)) return Math.min(120_000, Math.max(0, date - Date.now()));
+  return null;
 }
 
 export type { AxiosError };

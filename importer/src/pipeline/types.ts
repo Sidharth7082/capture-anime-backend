@@ -56,6 +56,12 @@ export interface JobStore {
   markPage(source: string, page: number, totalItems: number): Promise<void>;
   /** Final state + duration on success/failure/cancel. */
   markFinished(source: string, status: "completed" | "failed", error?: string | null): Promise<void>;
+  /**
+   * Serialize concurrent runs of the same source: acquire a session-scoped
+   * advisory lock (held on one dedicated connection). Resolves to a release
+   * function that must ALWAYS be called (runner uses try/finally).
+   */
+  acquireRunLock(source: string): Promise<() => Promise<void>>;
 }
 
 // --- runner ------------------------------------------------------------------

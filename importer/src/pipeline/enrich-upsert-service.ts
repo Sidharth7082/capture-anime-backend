@@ -51,8 +51,8 @@ async function resolveCharacterId(
     return id;
   }
   const byName = await client.query<{ id: number }>(
-    "SELECT id FROM characters WHERE name_first = $1 LIMIT 1",
-    [first],
+    "SELECT id FROM characters WHERE name_first = $1 AND name_last IS NOT DISTINCT FROM $2 LIMIT 1",
+    [first, last],
   );
   if (byName.rows[0]) {
     const id = byName.rows[0].id;
@@ -91,8 +91,8 @@ async function resolveStaffId(
     return id;
   }
   const byName = await client.query<{ id: number }>(
-    "SELECT id FROM staff WHERE name_first = $1 LIMIT 1",
-    [first],
+    "SELECT id FROM staff WHERE name_first = $1 AND name_last IS NOT DISTINCT FROM $2 LIMIT 1",
+    [first, last],
   );
   if (byName.rows[0]) {
     const id = byName.rows[0].id;
@@ -125,15 +125,20 @@ export class AnimeEnrichUpsertService implements UpsertPort<NormalizedAnimeEnric
       if (!animeRow) return "updated" as const; // not in the catalog yet
       const animeId = animeRow.id;
 
-      // Sync cursor: this anime was just enriched.
-      await client.query("UPDATE anime SET last_synced_at = now() WHERE id = $1", [animeId]);
+      // Sync cursor: this anime was just enriched (enrichment-specific so
+      // ENRICH_STALE_DAYS works even though Stage 1 also bumps last_synced_at).
+      await client.query("UPDATE anime SET enrich_synced_at = now(), last_synced_at = now() WHERE id = $1", [animeId]);
 
-      await this.writeCharactersAndVoiceActors(client, animeId, row);
-      await this.writeStaff(client, animeId, row);
-      await this.replaceRelations(client, animeId, row);
-      await this.replaceRecommendations(client, animeId, row);
-      await this.replacePictures(client, animeId, row);
-      await this.replaceVideos(client, animeId, row);
+      // Failed endpoints MUST NOT replace existing data: a transient Jikan
+      // error surfaces as an empty list, and delete-then-insert with an
+      // empty list would wipe what we already have. Skip those groups.
+      const failed = new Set(row.failedEndpoints);
+      if (!failed.has("characters")) await this.writeCharactersAndVoiceActors(client, animeId, row);
+      if (!failed.has("staff")) await this.writeStaff(client, animeId, row);
+      if (!failed.has("relations")) await this.replaceRelations(client, animeId, row);
+      if (!failed.has("recommendations")) await this.replaceRecommendations(client, animeId, row);
+      if (!failed.has("pictures")) await this.replacePictures(client, animeId, row);
+      if (!failed.has("videos")) await this.replaceVideos(client, animeId, row);
       return "updated" as const;
     });
   }
@@ -147,6 +152,7 @@ export class AnimeEnrichUpsertService implements UpsertPort<NormalizedAnimeEnric
       "SELECT character_id FROM anime_characters WHERE anime_id = $1",
       [animeId],
     );
+    const oldIds = before.rows.map((r) => r.character_id);
 
     const newIds: number[] = [];
     const voiceLinks: Array<{ characterId: number; staffId: number; language: string | null }> = [];
@@ -165,15 +171,19 @@ export class AnimeEnrichUpsertService implements UpsertPort<NormalizedAnimeEnric
       }
     }
 
-    // Prune voice links + character joins for characters Jikan no longer lists.
-    if (before.rows.length > 0) {
+    // Prune voice links for characters that are no longer part of this
+    // anime. Uses the OLD id list (NOT the freshly-written anime_characters
+    // rows), so this works even when the new list is empty.
+    if (oldIds.length > 0) {
+      const placeholders = newIds.length > 0 ? newIds.map((_, i) => `$${i + 2}`).join(", ") : "NULL";
       await client.query(
         `DELETE FROM character_staff
-         WHERE character_id IN (SELECT character_id FROM anime_characters WHERE anime_id = $1)
-           AND character_id NOT IN (${newIds.length ? newIds.map((_, i) => `$${i + 2}`).join(", ") : "NULL"})`,
-        [animeId, ...newIds],
+         WHERE character_id = ANY($1::bigint[])
+           AND character_id NOT IN (${placeholders})`,
+        [oldIds, ...newIds],
       );
     }
+    // Prune character joins Jikan no longer lists.
     if (newIds.length > 0) {
       await client.query(
         `DELETE FROM anime_characters WHERE anime_id = $1 AND character_id NOT IN (${newIds
@@ -183,10 +193,6 @@ export class AnimeEnrichUpsertService implements UpsertPort<NormalizedAnimeEnric
       );
     } else {
       await client.query("DELETE FROM anime_characters WHERE anime_id = $1", [animeId]);
-      await client.query(
-        "DELETE FROM character_staff WHERE character_id IN (SELECT character_id FROM anime_characters WHERE anime_id = $1)",
-        [animeId],
-      );
     }
 
     for (const link of voiceLinks) {

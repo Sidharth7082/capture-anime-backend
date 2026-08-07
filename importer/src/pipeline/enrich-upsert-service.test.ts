@@ -130,3 +130,55 @@ test("enrich upsert prunes stale character and staff joins", async () => {
     "stale staff join pruned",
   );
 });
+
+test("a failed characters endpoint does NOT delete existing character data", async () => {
+  const statements: string[] = [];
+  const db = {
+    transaction: async (fn: (c: unknown) => Promise<unknown>) =>
+      fn({
+        async query<T = Row>(sql: string, params: unknown[] = []): Promise<{ rows: T[] }> {
+          statements.push(sql.trim().replace(/\s+/g, " "));
+          const s = sql.trim();
+          if (s.startsWith("SELECT id FROM anime WHERE id_mal")) return { rows: [{ id: 100 }] as T[] };
+          if (s.startsWith("SELECT character_id FROM anime_characters")) return { rows: [] as T[] };
+          if (s.includes("RETURNING id")) return { rows: [{ id: 10 }] as T[] };
+          return { rows: [] as T[] };
+        },
+      }),
+  };
+
+  const svc = new AnimeEnrichUpsertService(db as never);
+  await svc.upsert({ ...ROW, failedEndpoints: ["characters", "staff", "pictures", "videos"], staff: [], pictures: [], videos: [] });
+
+  const all = statements.join("\n");
+  assert.ok(!all.includes("anime_characters"), "no character writes when the endpoint failed");
+  assert.ok(!all.includes("character_staff"), "no VA writes when the endpoint failed");
+  assert.ok(all.includes("INSERT INTO anime_recommendations"), "succeeded endpoints still written");
+});
+
+test("empty new character list still prunes old voice-actor links (old-id based)", async () => {
+  const statements: string[] = [];
+  const db = {
+    transaction: async (fn: (c: unknown) => Promise<unknown>) =>
+      fn({
+        async query<T = Row>(sql: string, params: unknown[] = []): Promise<{ rows: T[] }> {
+          statements.push(sql.trim().replace(/\s+/g, " "));
+          const s = sql.trim();
+          if (s.startsWith("SELECT id FROM anime WHERE id_mal")) return { rows: [{ id: 100 }] as T[] };
+          if (s.startsWith("SELECT character_id FROM anime_characters")) return { rows: [{ character_id: 55 }, { character_id: 66 }] as unknown as T[] };
+          if (s.includes("RETURNING id")) return { rows: [{ id: 10 }] as T[] };
+          return { rows: [] as T[] };
+        },
+      }),
+  };
+
+  const svc = new AnimeEnrichUpsertService(db as never);
+  await svc.upsert({ ...ROW, characters: [] });
+
+  const all = statements.join("\n");
+  assert.ok(
+    all.includes("DELETE FROM character_staff WHERE character_id = ANY($1::bigint[]) AND character_id NOT IN (NULL)"),
+    "VA links for removed characters are pruned even when the new list is empty",
+  );
+  assert.ok(all.includes("DELETE FROM anime_characters WHERE anime_id = $1"), "character joins cleared");
+});

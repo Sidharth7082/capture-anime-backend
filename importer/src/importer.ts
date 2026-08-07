@@ -130,7 +130,7 @@ export class Importer {
       return empty;
     }
     const staleDays = this.deps.enrichStaleDays ?? 0;
-    this.logger.info(`[jikan-enrich] stale filter: last_synced_at < now() - ${staleDays}d (0 = all)`);
+    this.logger.info(`[jikan-enrich] stale filter: enrich_synced_at < now() - ${staleDays}d (0 = all)`);
     metrics?.recordStart("jikan-enrich");
     const batchSize = this.deps.enrichBatchSize ?? 10;
     try {
@@ -143,7 +143,7 @@ export class Importer {
               const staleDays = this.deps.enrichStaleDays ?? 0;
               const rows = await this.deps.db!.query<{ id: number; id_mal: number }>(
                 `SELECT id, id_mal FROM anime
-                 WHERE last_synced_at IS NULL OR last_synced_at < NOW() - make_interval(days => $1)
+                 WHERE enrich_synced_at IS NULL OR enrich_synced_at < NOW() - make_interval(days => $1)
                  ORDER BY id_mal`,
                 [staleDays],
               );

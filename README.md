@@ -155,6 +155,7 @@ PostgreSQL ≥ 13, managed by a small SQL migration runner
 | `0009` | metadata tables: producers, licensors, themes, demographics + `mal_id` on genres/studios |
 | `0010` | enrichment content: anime_staff, anime_relations, anime_recommendations, anime_pictures, anime_videos + `mal_id` on characters/staff |
 | `0011` | schema hardening: unique `id_mal`/`slug`, `last_synced_at` on every imported table |
+| `0012` | `anime.enrich_synced_at` — enrichment-only cursor for stale refresh |
 
 **Canonical record** — one row per anime, enriched from multiple providers
 over time (Jikan today; AniList/TMDB planned as *enrichers* that only

@@ -5,8 +5,14 @@
  *
  * Handles: sequential pagination, resume from the last completed page,
  * per-page progress persistence, per-item failure isolation, optional
- * limit/maxPages/dry-run, cancellation between pages, and job bookkeeping.
+ * limit/maxPages/dry-run, cancellation between pages, per-source advisory
+ * locking (no two runs of the same source can overlap) and job bookkeeping.
  * The Typesense sink is invoked once per completed page.
+ *
+ * Resume safety: the resume point is only advanced for FULLY processed
+ * pages. A cancelled page, or a page whose sink failed, is never marked
+ * complete — the next run replays it (upserts are idempotent), so no items
+ * and no search-index updates are ever skipped.
  */
 import type {
   Fetcher,
@@ -40,10 +46,36 @@ export async function runPipeline<T, R>(
   deps: ConcreteDeps<T, R>,
   options: PipelineOptions = {},
 ): Promise<RunResult> {
+  const dryRun = options.dryRun ?? false;
+
+  // Serialize concurrent runs of the same source (daemon + manual CLI).
+  // The advisory lock is session-scoped, so it is held on one dedicated
+  // pooled connection for the whole run and always released in finally.
+  let release: (() => Promise<void>) | null = null;
+  if (!dryRun) {
+    release = await deps.jobs.acquireRunLock(deps.source);
+  }
+  try {
+    return await runLocked(deps, options, dryRun);
+  } finally {
+    if (release) {
+      try {
+        await release();
+      } catch (err) {
+        deps.logger?.error?.(`[${deps.source}] failed to release run lock: ${String(err)}`);
+      }
+    }
+  }
+}
+
+async function runLocked<T, R>(
+  deps: ConcreteDeps<T, R>,
+  options: PipelineOptions,
+  dryRun: boolean,
+): Promise<RunResult> {
   const { source, fetcher, normalizer, validator, upsert, jobs, sink } = deps;
   const logger = deps.logger ?? console;
   const isCancelled = deps.isCancelled ?? (() => false);
-  const dryRun = options.dryRun ?? false;
 
   // Resume: continue from the last completed page (unless reset/startPage).
   const resumePage = options.reset ? 0 : await jobs.getResumePage(source);
@@ -58,6 +90,7 @@ export async function runPipeline<T, R>(
   let page = startPage;
   let limitReached = false;
   let cancelled = false;
+  let sinkFailedPage: number | null = null;
 
   for (;;) {
     if (isCancelled()) {
@@ -85,10 +118,6 @@ export async function runPipeline<T, R>(
         cancelled = true;
         break;
       }
-      if (options.limit != null && counts.fetched >= options.limit) {
-        limitReached = true;
-        break;
-      }
       counts.fetched += 1;
 
       try {
@@ -103,10 +132,10 @@ export async function runPipeline<T, R>(
           counts.updated += 1; // would-upsert; exact insert/update unknown without DB
           continue;
         }
-        pageRows.push(check.row);
         const outcome = await upsert.upsert(check.row);
         if (outcome === "inserted") counts.inserted += 1;
         else counts.updated += 1;
+        pageRows.push(check.row); // only rows that persisted reach the sink
       } catch (err) {
         counts.failed += 1;
         logger.error(`[${source}] item failed: ${String(err)}`);
@@ -119,24 +148,38 @@ export async function runPipeline<T, R>(
     );
     deps.onProgress?.(page, { ...counts });
 
-    if (!dryRun) {
-      // Persist the resume point AFTER the page fully succeeded.
-      await jobs.markPage(source, page, counts.fetched);
-      // Feed the page's rows to the sink (Typesense) once indexing lands.
-      await sink.ingest(pageRows);
+    // Enforce the item limit at PAGE boundaries only: every page is processed
+    // atomically, so a truncated page can never become the resume point.
+    if (options.limit != null && counts.fetched >= options.limit) limitReached = true;
+
+    if (!dryRun && !cancelled) {
+      // Sink first, then advance the resume point. If indexing fails, the
+      // page is replayed on the next run (DB writes are idempotent) instead
+      // of leaving a permanent gap in the search index.
+      try {
+        await sink.ingest(pageRows);
+        await jobs.markPage(source, page, counts.fetched);
+      } catch (err) {
+        sinkFailedPage = page;
+        logger.error(`[${source}] sink failed on page ${page} — page will be retried on the next run: ${String(err)}`, { source, page });
+      }
     }
 
-    if (limitReached || !pageResult.hasNextPage) break;
+    if (limitReached || cancelled || !pageResult.hasNextPage) break;
     page += 1;
     if (deps.pageDelayMs) await delay(deps.pageDelayMs);
   }
 
-  const finalStatus = cancelled ? ("failed" as const) : ("completed" as const);
-  const error = cancelled ? "cancelled by signal" : null;
+  const finalStatus = cancelled || sinkFailedPage != null ? ("failed" as const) : ("completed" as const);
+  const error = cancelled
+    ? "cancelled by signal"
+    : sinkFailedPage != null
+      ? `sink failed on page ${sinkFailedPage} (page will be retried)`
+      : null;
   if (!dryRun) await jobs.markFinished(source, finalStatus, error);
 
-  const summary = `${source}: ${counts.inserted} inserted, ${counts.updated} updated, ${counts.failed} failed, ${counts.fetched} fetched (${limitReached ? "limit" : cancelled ? "cancelled" : "complete"}${dryRun ? ", dry-run" : ""})`;
-  return { ok: counts.failed === 0 && !cancelled, ...counts, summary };
+  const summary = `${source}: ${counts.inserted} inserted, ${counts.updated} updated, ${counts.failed} failed, ${counts.fetched} fetched (${limitReached ? "limit" : cancelled ? "cancelled" : sinkFailedPage != null ? "sink failed" : "complete"}${dryRun ? ", dry-run" : ""})`;
+  return { ok: counts.failed === 0 && !cancelled && sinkFailedPage == null, ...counts, summary };
 }
 
 function delay(ms: number): Promise<void> {

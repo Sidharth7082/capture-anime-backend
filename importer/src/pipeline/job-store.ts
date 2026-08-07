@@ -49,6 +49,15 @@ export class PostgresJobStore implements JobStore {
       [source, status, error ?? null],
     );
   }
+
+  /**
+   * Session-scoped Postgres advisory lock keyed by source — two runs of the
+   * same source (daemon scheduler + manual CLI) can never overlap. The lock
+   * lives on one dedicated pooled connection for the run's duration.
+   */
+  async acquireRunLock(source: string): Promise<() => Promise<void>> {
+    return this.db.advisoryLock(`import:${source}`);
+  }
 }
 
 export function createPostgresJobStore(db: Database): PostgresJobStore {
@@ -67,5 +76,8 @@ export function createNoopJobStore(): JobStore {
     async markStarted() {},
     async markPage() {},
     async markFinished() {},
+    async acquireRunLock() {
+      return async () => {};
+    },
   };
 }

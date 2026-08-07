@@ -73,6 +73,32 @@ export class Database {
     }
   }
 
+  /**
+   * Session-scoped Postgres advisory lock (hashtextextended, PG 11+).
+   * Checks out ONE dedicated pooled connection, locks it, and returns a
+   * release function that unlocks AND returns the connection to the pool.
+   * The caller must always invoke the release function (try/finally).
+   */
+  async advisoryLock(key: string): Promise<() => Promise<void>> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("SELECT pg_advisory_lock(hashtextextended($1, 0))", [key]);
+    } catch (err) {
+      client.release();
+      throw err;
+    }
+    let released = false;
+    return async () => {
+      if (released) return;
+      released = true;
+      try {
+        await client.query("SELECT pg_advisory_unlock(hashtextextended($1, 0))", [key]);
+      } finally {
+        client.release();
+      }
+    };
+  }
+
   /** Release all pooled connections (call on shutdown). */
   async close(): Promise<void> {
     await this.pool.end();

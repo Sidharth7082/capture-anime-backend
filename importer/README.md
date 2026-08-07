@@ -125,6 +125,16 @@ starts from page 1; dry-runs never touch the job table. Job rows record
 `started_at` / `finished_at` and the last `error`, so you can inspect the
 history per source:
 
+- The resume point only advances for **fully processed pages** — a
+  cancelled page or a page whose Typesense write failed is replayed on the
+  next run (upserts are idempotent), so items and search-index updates are
+  never skipped. `--limit` is enforced at page boundaries for the same
+  reason.
+- Every source takes a **session-scoped Postgres advisory lock** for the
+  duration of a run, so the daemon scheduler and a manual `npm run
+  import:anime` can never overlap (no duplicate work, no clobbered resume
+  state).
+
 ```sql
 SELECT source, status, last_page, total_items, started_at, finished_at
 FROM import_jobs;
@@ -140,6 +150,8 @@ FROM import_jobs;
 > - `0010_enrichment_content` — characters/staff `mal_id`, content tables
 > - `0011_schema_hardening` — unique external ids (`anime.id_mal`, `slug`),
 >   `updated_at` + `last_synced_at` on every imported table
+> - `0012_enrichment_sync_cursor` — `anime.enrich_synced_at`, so
+>   `ENRICH_STALE_DAYS` measures the last enrichment, not the last catalog run
 
 ### Sync timestamps & stale refresh
 
