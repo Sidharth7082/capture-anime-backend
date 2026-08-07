@@ -276,6 +276,8 @@ characters — expected until enrichment has run) print with counts.
 | `ENRICH_BATCH_SIZE` | `10` | anime per enrichment page (each = 6 detail requests) |
 | `ENRICH_STALE_DAYS` | `0` | only enrich anime whose `last_synced_at` is older (0 = all) |
 | `DATABASE_URL` | — | PostgreSQL connection string |
+| `PG_STATEMENT_TIMEOUT_MS` | `15000` | `statement_timeout` on every connection (runaway-query guard) |
+| `PG_SLOW_QUERY_MS` | `250` | log queries slower than this (slow-query log) |
 | `PG_POOL_MAX` | `5` | pool size |
 | `TYPESENSE_ENABLED` | `false` | `true` indexes every imported page |
 | `TYPESENSE_URL` / `TYPESENSE_API_KEY` / `TYPESENSE_COLLECTION` | — | Typesense connection |

@@ -24,7 +24,9 @@
     "test": "node --test 'test/unit/**/*.test.mjs'",
     "secrets": "node scripts/generate-secrets.mjs",
     "catalog:verify": "cd importer && npm run verify-catalog",
-    "bench": "node scripts/bench/http.mjs"
+    "bench": "node scripts/bench/http.mjs",
+    "test:coverage": "node --test --experimental-test-coverage 'test/unit/**/*.test.mjs'",
+    "test:ci": "node scripts/check-coverage.mjs"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",

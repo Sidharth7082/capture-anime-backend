@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+    branches: [main, stable-importer]
+  pull_request:
+
+jobs:
+  backend:
+    name: Backend tests + coverage gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Test suite
+        run: npm test
+      - name: Coverage gate (>= 90% lines)
+        run: npm run test:ci
+
+  importer:
+    name: Importer tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: importer
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: importer/package-lock.json
+      - run: npm ci
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Build
+        run: npm run build
+      - name: Test suite
+        run: npm test

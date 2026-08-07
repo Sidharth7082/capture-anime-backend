@@ -1,5 +1,7 @@
 # CaptureOrDie — Anime Streaming Platform (Backend)
 
+[![CI](https://github.com/Sidharth7082/capture-anime-backend/actions/workflows/ci.yml/badge.svg)](https://github.com/Sidharth7082/capture-anime-backend/actions/workflows/ci.yml)
+
 Production backend for an anime streaming site: a **REST API** (Express +
 PostgreSQL) that serves the frontend, and a **catalog pipeline** (Node/TS
 importer) that fills the database from upstream anime databases.
