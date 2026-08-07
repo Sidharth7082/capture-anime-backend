@@ -4,7 +4,7 @@
  * A different source (MAL user list, AniList, TMDB, ...) brings its own
  * normalizer; the rest of the pipeline is unchanged.
  */
-import type { NormalizedAnime } from "./types.js";
+import type { MetadataRef, NormalizedAnime } from "./types.js";
 
 /** Jikan anime shape (only the fields Stage 1 consumes). */
 export interface JikanAnime {
@@ -35,6 +35,12 @@ export interface JikanAnime {
     };
     webp?: { large_image_url?: string | null; medium_image_url?: string | null };
   } | null;
+  genres?: { mal_id?: number; name?: string }[] | null;
+  themes?: { mal_id?: number; name?: string }[] | null;
+  demographics?: { mal_id?: number; name?: string }[] | null;
+  studios?: { mal_id?: number; name?: string }[] | null;
+  producers?: { mal_id?: number; name?: string }[] | null;
+  licensors?: { mal_id?: number; name?: string }[] | null;
 }
 
 // --- enum mappings (Jikan string -> platform enum) --------------------------
@@ -88,6 +94,20 @@ function parseDurationMinutes(duration: string | null | undefined): number | nul
   return match ? Number(match[1]) : null;
 }
 
+/** Normalize an embedded MAL metadata array into unique MetadataRef[]. */
+function normalizeMetadata(refs: { mal_id?: number; name?: string }[] | null | undefined): MetadataRef[] {
+  if (!Array.isArray(refs)) return [];
+  const seen = new Set<number>();
+  const out: MetadataRef[] = [];
+  for (const ref of refs) {
+    if (!ref || typeof ref !== "object") continue;
+    if (ref.mal_id == null || !ref.name || seen.has(ref.mal_id)) continue;
+    seen.add(ref.mal_id);
+    out.push({ malId: ref.mal_id, name: ref.name });
+  }
+  return out;
+}
+
 /** Map a Jikan list item into the platform `anime` row shape. */
 export function normalizeAnimeItem(item: JikanAnime): NormalizedAnime {
   const score = item.score != null ? Math.max(0, Math.min(100, Math.round(item.score * 10))) : null;
@@ -125,5 +145,11 @@ export function normalizeAnimeItem(item: JikanAnime): NormalizedAnime {
     isAdult: item.rating?.startsWith("Rx") ?? false,
     coverImageLarge: item.images?.jpg?.large_image_url ?? item.images?.webp?.large_image_url ?? null,
     coverImageMedium: item.images?.jpg?.medium_image_url ?? item.images?.webp?.medium_image_url ?? item.images?.jpg?.image_url ?? null,
+    genres: normalizeMetadata(item.genres),
+    themes: normalizeMetadata(item.themes),
+    demographics: normalizeMetadata(item.demographics),
+    studios: normalizeMetadata(item.studios),
+    producers: normalizeMetadata(item.producers),
+    licensors: normalizeMetadata(item.licensors),
   };
 }

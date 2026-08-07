@@ -8,6 +8,9 @@
 export interface SchedulerOptions {
   intervalMs: number;
   runOnStart: boolean;
+  /** Called when a run starts/finishes (metrics / next-run tracking). */
+  onRunStart?: () => void;
+  onRunFinished?: () => void;
   logger?: Pick<Console, "warn" | "error" | "info">;
 }
 
@@ -16,6 +19,8 @@ export interface Scheduler {
   start(): void;
   /** Stop scheduling and wait for any in-flight run. */
   stop(): Promise<void>;
+  /** When the next interval tick fires (null before start). */
+  getNextRunAt(): number | null;
 }
 
 export function createScheduler(
@@ -26,6 +31,7 @@ export function createScheduler(
   let timer: NodeJS.Timeout | null = null;
   let running = false;
   let stopping = false;
+  let nextRunAt: number | null = null;
 
   const runOnce = async (trigger: "start" | "interval") => {
     if (running) {
@@ -36,12 +42,15 @@ export function createScheduler(
     const startedAt = Date.now();
     try {
       logger.info(`[scheduler] ${trigger} run started`);
+      options.onRunStart?.();
       await job();
       logger.info(`[scheduler] ${trigger} run finished in ${Date.now() - startedAt}ms`);
     } catch (err) {
       logger.error(`[scheduler] ${trigger} run failed: ${String(err)}`);
     } finally {
       running = false;
+      nextRunAt = Date.now() + options.intervalMs;
+      options.onRunFinished?.();
     }
   };
 
@@ -55,7 +64,12 @@ export function createScheduler(
       if (options.intervalMs > 0) {
         timer = setInterval(() => void runOnce("interval"), options.intervalMs);
         timer.unref?.();
+        nextRunAt = Date.now() + options.intervalMs;
       }
+    },
+
+    getNextRunAt() {
+      return nextRunAt;
     },
 
     async stop() {

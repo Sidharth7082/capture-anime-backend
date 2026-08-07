@@ -8,12 +8,14 @@ It lives in its own folder with its own `package.json`/`tsconfig.json` and is
 **completely independent** from the Express API in `src/` — it only shares the
 database.
 
-> ⚠️ **Stage 1 — anime import implemented.** The importer fetches the full
-> Jikan catalogue through a reusable pipeline (fetch → normalize → validate →
-> upsert → sink) and writes it into the platform's `anime` table by MAL id,
-> with **resume support** (`import_jobs`). Characters, episodes, studios,
-> genres, relations, themes, pictures, trailers and Typesense are **not**
-> imported yet.
+> ⚠️ **Stages 1–2 implemented, Stage 3 (search) ready-to-enable.** The importer
+> fetches the full Jikan catalogue through a reusable pipeline (fetch →
+> normalize → validate → upsert → sink), writes the `anime` table by MAL id,
+> **and links all six metadata groups (genres, studios, producers, licensors,
+> themes, demographics) in the same per-anime transaction**. Resume support
+> (`import_jobs`) is in place and the Typesense sink is wired (flip
+> `TYPESENSE_ENABLED=true`). Characters, episodes, relations, pictures and
+> trailers are **not** imported yet.
 
 ## Pipeline
 
@@ -26,15 +28,20 @@ Source (Jikan)              pipeline/                platform
         │
         ▼
   fetchers.ts ──► normalizers.ts ──► validator.ts ──► upsert-service.ts ──► PostgreSQL
-        │                            (zod)               │
-        │                                                 ▼
-        └────────────  runner.ts (pages, resume,          typesense.ts (Stage 5)
-                       bookkeeping, cancel) ──► job-store.ts (import_jobs)
+        │                            (zod)               │                 (anime +
+        │                                                 │                  genres,
+        └────────────  runner.ts (pages, resume,          │                  studios,
+                       bookkeeping, cancel) ──► job-store.ts (import_jobs)  producers…)
+                                                  │
+                                                  ▼
+                                          typesense.ts sink (per page)
 ```
 
 ```
 importer/
 ├── src/
+│   ├── metrics.ts           # in-memory counters + last/current run (health)
+│   ├── health.ts            # GET /health endpoint (node:http)
 │   ├── index.ts              # daemon entrypoint: env validation, wiring, shutdown
 │   ├── run-import.ts         # CLI: one-shot anime import (see below)
 │   ├── jikan.ts              # Jikan v4 API client (axios, timeout, retry, types)
@@ -46,9 +53,9 @@ importer/
 │       ├── types.ts          # Fetcher / Normalizer / Validator / UpsertPort /
 │       │                     #   Sink / JobStore contracts + NormalizedAnime
 │       ├── fetchers.ts       # JikanAnimeFetcher (other sources add one here)
-│       ├── normalizers.ts    # Jikan → platform row (pure, unit-tested)
-│       ├── validator.ts      # zod schema enforcing the anime table contract
-│       ├── upsert-service.ts # anime upsert by mal_id (per-row transaction)
+│       ├── normalizers.ts    # Jikan → platform row + 6 metadata arrays (pure)
+│       ├── validator.ts      # zod schema enforcing the anime + metadata contract
+│       ├── upsert-service.ts # anime + metadata upsert by mal_id (one txn)
 │       ├── job-store.ts      # import_jobs persistence (+ no-op for dry-run)
 │       ├── runner.ts         # generic pipeline: pagination, resume, counters
 │       └── *.test.ts         # normalizer / validator / runner unit tests
@@ -127,12 +134,57 @@ FROM import_jobs;
 >   no AniList id) + `anime_id_mal_idx`
 > - `0008_import_jobs` — resume/progress table
 
-Covered fields (Stage 1): mal_id, titles (romaji/english/native/synonyms),
-description, type→format, status, source, episodes, duration, aired dates,
-season/year, score (×10 → 0–100), members→popularity, favorites, is_adult
-(Rx rating), cover images. Everything else (trailers, banner, genres,
-studios, characters, episodes rows, Typesense) stays untouched for later
-stages.
+Covered fields: mal_id, titles (romaji/english/native/synonyms), description,
+type→format, status, source, episodes, duration, aired dates, season/year,
+score (×10 → 0–100), members→popularity, favorites, is_adult (Rx rating),
+cover images, and **all six metadata groups** (genres, studios, producers,
+licensors, themes, demographics — linked + pruned per anime). Everything
+else (trailers, banner, characters, episodes rows) stays untouched for
+later stages.
+
+### Stage 2 metadata (genres · studios · producers · licensors · themes · demographics)
+
+Jikan list items embed all six arrays, so metadata rides along with every
+anime row — **no extra API calls**. For each anime, inside the same
+per-row transaction:
+
+1. Each metadata row is resolved by `mal_id`, then by `name` (this links
+   genres/studios already imported from AniList), else inserted.
+2. Join rows are written (`anime_genres`, `anime_studios`, `anime_producers`, …)
+   with `ON CONFLICT DO NOTHING`.
+3. Stale joins Jikan no longer lists are pruned, so the DB mirrors MAL
+   exactly.
+
+> **Migration required once**: `0009_metadata_tables` adds `mal_id` to
+> `genres`/`studios` and creates `producers`, `licensors`, `themes`,
+> `demographics` (+ their join tables). Apply with `npm run migrate` from the
+> repo root.
+
+### Typesense search index (Stage 3)
+
+Set `TYPESENSE_ENABLED=true` (+ `TYPESENSE_URL`, `TYPESENSE_API_KEY`). The
+runner feeds every completed page into the sink, which:
+
+- creates the `anime` collection on first use (schema in
+  `ANIME_COLLECTION_FIELDS`, `default_sorting_field: popularity`),
+- upserts documents keyed `anime:{mal_id}` (stable across reimports),
+- flattens genres/studios/producers/licensors/themes/demographics into
+  `string[]` facets and strips HTML from the synopsis.
+
+### Observability
+
+- **Structured logs** — `LOG_FORMAT=json` emits one JSON object per line
+  (`{ts, level, msg, source, page, inserted, …}`), `pretty` for local dev.
+- **Metrics** — the daemon records current page + counters and the last run
+  (counts, duration, status) in memory (`metrics.ts`).
+- **Health endpoint** — `GET :HEALTH_PORT/health` (default 9090) reports
+  uptime, the current/last import, the next scheduled run and the
+  `import_jobs` table:
+
+```bash
+curl http://localhost:9090/health
+# {"status":"ok","uptimeSeconds":…,"import":{…},"jobs":[…]}
+```
 
 ## Configuration (`.env`)
 
@@ -143,12 +195,14 @@ stages.
 | `JIKAN_RETRY_COUNT` | `3` | retries with backoff (429-aware) |
 | `DATABASE_URL` | — | PostgreSQL connection string |
 | `PG_POOL_MAX` | `5` | pool size |
-| `TYPESENSE_ENABLED` | `false` | set `true` when the search step is implemented |
+| `TYPESENSE_ENABLED` | `false` | `true` indexes every imported page |
 | `TYPESENSE_URL` / `TYPESENSE_API_KEY` / `TYPESENSE_COLLECTION` | — | Typesense connection |
 | `RUN_ON_START` | `true` | run one import immediately at boot |
 | `SCHEDULER_ENABLED` | `true` | run imports on an interval |
 | `SCHEDULER_INTERVAL_MS` | `3600000` | interval between runs |
 | `LOG_LEVEL` | `info` | `debug` / `info` / `warn` / `error` |
+| `LOG_FORMAT` | json (prod) / pretty (dev) | structured vs human-readable logs |
+| `HEALTH_ENABLED` / `HEALTH_PORT` | `true` / `9090` | health endpoint |
 
 Invalid/missing required vars fail **at boot** with the exact missing key
 (zod validation) — never halfway through a run.

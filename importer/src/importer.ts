@@ -15,7 +15,7 @@
 import type { JikanClient } from "./jikan.js";
 import type { Database } from "./database.js";
 import type { TypesenseClient } from "./typesense.js";
-import { createNoopSink } from "./typesense.js";
+import type { Metrics } from "./metrics.js";
 import { createJikanAnimeFetcher } from "./pipeline/fetchers.js";
 import { normalizeAnimeItem, type JikanAnime } from "./pipeline/normalizers.js";
 import { validateAnimeRow } from "./pipeline/validator.js";
@@ -28,6 +28,8 @@ export interface ImportDeps {
   jikan: JikanClient;
   db: Database;
   typesense: TypesenseClient;
+  /** Optional metrics registry for the /health endpoint. */
+  metrics?: Metrics;
   /** Polite delay between page requests (0 to disable). */
   pageDelayMs?: number;
   logger?: Pick<Console, "debug" | "info" | "warn" | "error">;
@@ -52,7 +54,8 @@ export class Importer {
     this.deps = deps;
     this.logger = deps.logger ?? console;
     this.jobs = createPostgresJobStore(deps.db);
-    this.sink = createNoopSink(deps.logger) as Sink<NormalizedAnime>;
+    // Real Typesense sink when enabled, no-op otherwise.
+    this.sink = deps.typesense.createSink();
   }
 
   /** Ask a running import to stop at the next safe boundary (page/item). */
@@ -72,21 +75,38 @@ export class Importer {
    */
   async importAnime(options: AnimeImportOptions = {}): Promise<RunResult> {
     this.cancelled = false;
-    return runPipeline<JikanAnime, NormalizedAnime>(
-      {
-        source: "jikan-anime",
-        fetcher: createJikanAnimeFetcher(this.deps.jikan),
-        normalizer: normalizeAnimeItem,
-        validator: validateAnimeRow,
-        upsert: createAnimeUpsertService(this.deps.db),
-        jobs: this.jobs,
-        sink: this.sink,
-        pageDelayMs: this.deps.pageDelayMs,
-        isCancelled: () => this.cancelled,
-        logger: this.logger,
-      },
-      options,
-    );
+    const metrics = this.deps.metrics;
+    metrics?.recordStart("jikan-anime");
+    try {
+      const result = await runPipeline<JikanAnime, NormalizedAnime>(
+        {
+          source: "jikan-anime",
+          fetcher: createJikanAnimeFetcher(this.deps.jikan),
+          normalizer: normalizeAnimeItem,
+          validator: validateAnimeRow,
+          upsert: createAnimeUpsertService(this.deps.db),
+          jobs: this.jobs,
+          sink: this.sink,
+          pageDelayMs: this.deps.pageDelayMs,
+          isCancelled: () => this.cancelled,
+          onProgress: (page, counts) => metrics?.recordPage("jikan-anime", page, counts),
+          logger: this.logger,
+        },
+        options,
+      );
+      metrics?.recordEnd("jikan-anime", result, result.ok ? "completed" : "failed");
+      return result;
+    } catch (err) {
+      metrics?.recordEnd("jikan-anime", {
+        ok: false,
+        fetched: 0,
+        inserted: 0,
+        updated: 0,
+        failed: 0,
+        summary: String(err),
+      }, "failed", String(err));
+      throw err;
+    }
   }
 
   /**

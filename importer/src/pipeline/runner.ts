@@ -14,6 +14,7 @@ import type {
   Normalizer,
   PipelineDeps,
   PipelineOptions,
+  RunCounters,
   RunResult,
   Sink,
   UpsertPort,
@@ -30,6 +31,8 @@ export interface ConcreteDeps<T, R> {
   sink: Sink<R>;
   pageDelayMs?: number;
   isCancelled?: () => boolean;
+  /** Called after each completed page with live counters (metrics/UI). */
+  onProgress?: (page: number, counts: RunCounters) => void;
   logger?: Pick<Console, "warn" | "error" | "info">;
 }
 
@@ -48,6 +51,7 @@ export async function runPipeline<T, R>(
   if (!dryRun) await jobs.markStarted(source, resumePage);
   logger.info(
     `[${source}] started (resume from page ${resumePage}; starting at ${startPage}${dryRun ? ", dry-run" : ""})`,
+    { source, resumePage, startPage, dryRun },
   );
 
   const counts = { fetched: 0, inserted: 0, updated: 0, failed: 0 };
@@ -67,7 +71,7 @@ export async function runPipeline<T, R>(
       pageResult = await fetcher.fetchPage(page);
     } catch (err) {
       counts.failed += 1;
-      logger.error(`[${source}] page ${page} failed after retries: ${String(err)}`);
+      logger.error(`[${source}] page ${page} failed after retries: ${String(err)}`, { source, page });
       await jobs.markFinished(source, "failed", String(err));
       return { ok: false, ...counts, summary: `${source}: aborted on page ${page} (${String(err)})` };
     }
@@ -111,7 +115,9 @@ export async function runPipeline<T, R>(
 
     logger.info(
       `[${source}] page ${page}: +${counts.inserted} / ~${counts.updated} / !${counts.failed} (${counts.fetched} fetched${dryRun ? " [dry-run]" : ""})`,
+      { source, page, inserted: counts.inserted, updated: counts.updated, failed: counts.failed, fetched: counts.fetched, dryRun },
     );
+    deps.onProgress?.(page, { ...counts });
 
     if (!dryRun) {
       // Persist the resume point AFTER the page fully succeeded.

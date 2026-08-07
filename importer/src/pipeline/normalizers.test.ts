@@ -123,3 +123,53 @@ test("negative counts are clamped to 0 (CHECK constraints)", () => {
   assert.equal(row.favourites, 0);
   assert.equal(row.averageScore, 0);
 });
+
+test("metadata arrays are normalized from Jikan list items", () => {
+  const row = normalizeAnimeItem({
+    ...BASE,
+    genres: [
+      { mal_id: 1, name: "Action" },
+      { mal_id: 46, name: "Award Winning" },
+    ],
+    themes: [{ mal_id: 29, name: "Space" }],
+    demographics: [],
+    studios: [{ mal_id: 14, name: "Sunrise" }],
+    producers: [
+      { mal_id: 23, name: "Bandai Visual" },
+      { mal_id: 123, name: "Victor Entertainment" },
+    ],
+    licensors: [{ mal_id: 102, name: "Funimation" }],
+  });
+  assert.deepEqual(row.genres, [
+    { malId: 1, name: "Action" },
+    { malId: 46, name: "Award Winning" },
+  ]);
+  assert.deepEqual(row.themes, [{ malId: 29, name: "Space" }]);
+  assert.deepEqual(row.demographics, []);
+  assert.deepEqual(row.studios, [{ malId: 14, name: "Sunrise" }]);
+  assert.deepEqual(row.producers, [
+    { malId: 23, name: "Bandai Visual" },
+    { malId: 123, name: "Victor Entertainment" },
+  ]);
+  assert.deepEqual(row.licensors, [{ malId: 102, name: "Funimation" }]);
+});
+
+test("metadata normalization drops invalid and duplicate entries", () => {
+  const row = normalizeAnimeItem({
+    ...BASE,
+    genres: [
+      { mal_id: 1, name: "Action" },
+      { mal_id: 1, name: "Action" }, // duplicate mal_id
+      { mal_id: 2, name: "" }, // missing name
+      { mal_id: 3 }, // missing name
+      { name: "No Id" }, // missing mal_id
+      null,
+      undefined,
+    ] as never,
+    studios: undefined,
+    producers: null,
+  });
+  assert.deepEqual(row.genres, [{ malId: 1, name: "Action" }]);
+  assert.deepEqual(row.studios, []);
+  assert.deepEqual(row.producers, []);
+});

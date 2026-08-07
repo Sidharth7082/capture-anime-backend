@@ -100,6 +100,12 @@ export interface PipelineDeps<T, R> {
 
 // --- normalized anime row (platform schema) ----------------------------------
 
+/** A MAL metadata reference embedded in Jikan anime items. */
+export interface MetadataRef {
+  malId: number;
+  name: string;
+}
+
 /** Normalized row matching the `anime` table columns (Stage 1 subset). */
 export interface NormalizedAnime {
   idMal: number;
@@ -124,4 +130,11 @@ export interface NormalizedAnime {
   isAdult: boolean;
   coverImageLarge: string | null;
   coverImageMedium: string | null;
+  /** Stage 2 metadata (embedded in Jikan list items). */
+  genres: MetadataRef[];
+  themes: MetadataRef[];
+  demographics: MetadataRef[];
+  studios: MetadataRef[];
+  producers: MetadataRef[];
+  licensors: MetadataRef[];
 }

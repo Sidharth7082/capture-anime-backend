@@ -46,3 +46,32 @@ test("accepts a minimal row (all nulls) since the table allows nulls", () => {
   const check = validateAnimeRow(normalizeAnimeItem({ mal_id: 1, title: "X" }));
   assert.equal(check.ok, true);
 });
+
+test("accepts metadata arrays on a well-formed row", () => {
+  const row = normalizeAnimeItem({
+    ...VALID_ITEM,
+    genres: [{ mal_id: 1, name: "Action" }],
+    themes: [{ mal_id: 29, name: "Space" }],
+    studios: [{ mal_id: 14, name: "Sunrise" }],
+    producers: [{ mal_id: 23, name: "Bandai Visual" }],
+    licensors: [{ mal_id: 102, name: "Funimation" }],
+    demographics: [],
+  });
+  const check = validateAnimeRow(row);
+  assert.equal(check.ok, true);
+  if (check.ok) assert.equal(check.row.genres.length, 1);
+});
+
+test("rejects malformed metadata refs", () => {
+  const row = normalizeAnimeItem(VALID_ITEM);
+  const bad = validateAnimeRow({
+    ...row,
+    genres: [{ malId: 0, name: "Bad" }], // malId must be positive
+    themes: [{ malId: 1, name: "" }], // name must be non-empty
+  });
+  assert.equal(bad.ok, false);
+  if (!bad.ok) {
+    assert.match(bad.reason, /genres.0.malId/);
+    assert.match(bad.reason, /themes.0.name/);
+  }
+});

@@ -20,7 +20,7 @@ import { createImporter } from "./importer.js";
 import { createNoopJobStore } from "./pipeline/job-store.js";
 
 const env = loadEnv();
-const logger = createLogger(env.LOG_LEVEL);
+const logger = createLogger(env.LOG_LEVEL, env.LOG_FORMAT ?? (env.NODE_ENV === "production" ? "json" : "pretty"));
 
 // --- args -------------------------------------------------------------------
 const args = process.argv.slice(2);

@@ -10,6 +10,11 @@ import type { NormalizedAnime, ValidationResult } from "./types.js";
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
+const metadataRefSchema = z.object({
+  malId: z.number().int().positive(),
+  name: z.string().min(1),
+});
+
 export const animeRowSchema = z.object({
   idMal: z.number().int().positive(),
   titleRomaji: z.string().nullable(),
@@ -33,6 +38,12 @@ export const animeRowSchema = z.object({
   isAdult: z.boolean(),
   coverImageLarge: z.string().nullable(),
   coverImageMedium: z.string().nullable(),
+  genres: z.array(metadataRefSchema),
+  themes: z.array(metadataRefSchema),
+  demographics: z.array(metadataRefSchema),
+  studios: z.array(metadataRefSchema),
+  producers: z.array(metadataRefSchema),
+  licensors: z.array(metadataRefSchema),
 });
 
 export type Validator<T> = (row: T) => ValidationResult<T>;

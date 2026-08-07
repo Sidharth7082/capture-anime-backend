@@ -36,6 +36,12 @@ const toRow = (raw: Raw): NormalizedAnime =>
     isAdult: false,
     coverImageLarge: null,
     coverImageMedium: null,
+    genres: [],
+    themes: [],
+    demographics: [],
+    studios: [],
+    producers: [],
+    licensors: [],
   }) satisfies NormalizedAnime;
 
 class FakeJobStore implements JobStore {

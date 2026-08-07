@@ -12,6 +12,8 @@ import { createDatabase, type Database } from "./database.js";
 import { createTypesense, type TypesenseClient } from "./typesense.js";
 import { createImporter } from "./importer.js";
 import { createScheduler } from "./scheduler.js";
+import { createMetrics } from "./metrics.js";
+import { createHealthServer, type HealthServer } from "./health.js";
 
 // ---------------------------------------------------------------------------
 // Environment (validated once at boot — fail fast with the exact missing key)
@@ -19,6 +21,7 @@ import { createScheduler } from "./scheduler.js";
 const envSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
   LOG_LEVEL: z.enum(["debug", "info", "warn", "error"]).default("info"),
+  LOG_FORMAT: z.enum(["pretty", "json"]).optional(),
 
   JIKAN_API_URL: z.string().url(),
   JIKAN_TIMEOUT_MS: z.coerce.number().int().positive().default(15_000),
@@ -36,6 +39,9 @@ const envSchema = z.object({
   RUN_ON_START: z.enum(["true", "false"]).default("true"),
   SCHEDULER_ENABLED: z.enum(["true", "false"]).default("true"),
   SCHEDULER_INTERVAL_MS: z.coerce.number().int().min(1).default(3_600_000),
+
+  HEALTH_ENABLED: z.enum(["true", "false"]).default("true"),
+  HEALTH_PORT: z.coerce.number().int().min(0).max(65535).default(9090),
 });
 
 export type Env = z.infer<typeof envSchema>;
@@ -49,7 +55,10 @@ export function loadEnv(): Env {
     console.error(`Invalid environment configuration:\n${issues}\nSee importer/.env.example`);
     process.exit(1);
   }
-  return parsed.data;
+  const env = parsed.data;
+  // Default: JSON logs in production, human-readable locally.
+  env.LOG_FORMAT = env.LOG_FORMAT ?? (env.NODE_ENV === "production" ? "json" : "pretty");
+  return env;
 }
 
 // ---------------------------------------------------------------------------
@@ -60,13 +69,30 @@ const LEVEL_ORDER: Record<Level, number> = { debug: 0, info: 1, warn: 2, error: 
 
 export type Logger = Pick<Console, "debug" | "info" | "warn" | "error">;
 
-export function createLogger(level: Level): Logger {
+export type LogFormat = "pretty" | "json";
+
+/**
+ * Leveled logger. `pretty` writes `2026-... [LEVEL] message fields...`;
+ * `json` writes one JSON object per line ({ ts, level, msg, ...fields })
+ * so logs can be piped into jq / a log collector.
+ */
+export function createLogger(level: Level, format: LogFormat = "pretty"): Logger {
   const min = LEVEL_ORDER[level];
   const log = (lvl: Level, ...args: unknown[]) => {
-    if (LEVEL_ORDER[lvl] >= min) {
-      const line = args.map((a) => (typeof a === "string" ? a : JSON.stringify(a))).join(" ");
-      console[lvl === "debug" ? "log" : lvl](`${new Date().toISOString()} [${lvl.toUpperCase()}] ${line}`);
+    if (LEVEL_ORDER[lvl] < min) return;
+    const [msg, fields] = args;
+    const ts = new Date().toISOString();
+    if (format === "json") {
+      const entry: Record<string, unknown> = { ts, level: lvl, msg: String(msg ?? "") };
+      if (fields && typeof fields === "object") Object.assign(entry, fields as Record<string, unknown>);
+      console[lvl === "debug" ? "log" : lvl](JSON.stringify(entry));
+      return;
     }
+    const rest = args
+      .slice(1)
+      .map((a) => (typeof a === "string" ? a : JSON.stringify(a)))
+      .join(" ");
+    console[lvl === "debug" ? "log" : lvl](`${ts} [${lvl.toUpperCase()}] ${String(msg)}${rest ? ` ${rest}` : ""}`);
   };
   return {
     debug: (...a) => log("debug", ...a),
@@ -81,7 +107,8 @@ export function createLogger(level: Level): Logger {
 // ---------------------------------------------------------------------------
 async function main(): Promise<void> {
   const env = loadEnv();
-  const logger = createLogger(env.LOG_LEVEL);
+  const logger = createLogger(env.LOG_LEVEL, env.LOG_FORMAT ?? "pretty");
+  const metrics = createMetrics();
 
   const jikan: JikanClient = createJikanClient({
     baseUrl: env.JIKAN_API_URL,
@@ -102,6 +129,7 @@ async function main(): Promise<void> {
     jikan,
     db,
     typesense,
+    metrics,
     pageDelayMs: env.JIKAN_PAGE_DELAY_MS,
     logger,
   });
@@ -116,7 +144,16 @@ async function main(): Promise<void> {
     intervalMs: env.SCHEDULER_INTERVAL_MS,
     runOnStart: env.RUN_ON_START === "true",
     logger,
+    onRunFinished: () => metrics.setNextRunAt(scheduler.getNextRunAt()),
   });
+
+  // Health endpoint: last import, current job, next scheduled run.
+  let healthServer: HealthServer | null = null;
+  if (env.HEALTH_ENABLED === "true") {
+    healthServer = createHealthServer({ metrics, db, port: env.HEALTH_PORT, logger });
+    await healthServer.listen();
+    logger.info(`[boot] health endpoint on :${healthServer.port} (GET /health)`);
+  }
 
   if (env.SCHEDULER_ENABLED === "true") {
     scheduler.start();
@@ -133,6 +170,7 @@ async function main(): Promise<void> {
     shuttingDown = true;
     logger.info(`[boot] received ${signal} — shutting down`);
     await scheduler.stop();
+    if (healthServer) await healthServer.close();
     await db.close();
     process.exit(0);
   };
