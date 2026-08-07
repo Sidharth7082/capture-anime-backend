@@ -179,12 +179,14 @@ src/
 ├── server.js               # bootstrap + graceful shutdown + token pruner
 ├── config/env.js           # zod-validated env (fails fast on bad config)
 ├── db/pool.js              # pg pool (INT8 -> number) + withTransaction
-├── lib/                    # logger (winston), jwt, password, cache, pagination, errors
+├── lib/                    # logger (winston), jwt, password, crypto (AES-GCM), cache, pagination, errors
 ├── middleware/             # authenticate, validate (zod), error-handler, cache, request-logger
 ├── modules/
 │   ├── auth/               # repository -> service -> controller -> routes
 │   ├── anime/              # catalog queries (parameterized, whitelisted sorts)
-│   └── user/               # profile, favorites, watch history
+│   ├── user/               # profile, favorites, watch history, continue watching
+│   ├── watch/              # Anivexa stream proxy (HLS) + prefetch + cache
+│   └── mal/                # MyAnimeList OAuth2 PKCE sync (encrypted tokens)
 └── openapi.yaml            # complete OpenAPI 3 spec (served at /api-docs)
 ```
 
@@ -194,7 +196,9 @@ src/
 |---|---|
 | Catalog | `GET /api/anime`, `/api/anime/:id`, `/api/anime/trending`, `/api/anime/popular`, `/api/anime/recent`, `/api/anime/search?q=`, `/api/anime/genre/:id`, `/api/anime/studio/:id`, `GET /api/episodes/:animeId` |
 | Auth | `POST /api/auth/register`, `/login`, `/refresh`, `/logout` |
-| User (JWT) | `GET /api/user/profile`, `GET|POST /api/user/favorites`, `DELETE /api/user/favorites/:id`, `GET /api/user/history` |
+| User (JWT) | `GET /api/user/profile`, `GET|POST /api/user/favorites`, `DELETE /api/user/favorites/:id` (also matches by anime id), `GET|POST /api/user/history`, `GET|PUT|DELETE /api/user/continue-watching(/:animeId)` |
+| Watch (JWT) | `GET /api/watch/:animeId/:episode`, `GET /api/watch/:animeId/prefetch` — streams via the self-hosted Anivexa API (HLS), cached 30–60 min with SWR |
+| MyAnimeList (JWT) | `GET /api/mal/connect` → `{ authorizeUrl }`, `GET /api/mal/callback` (browser), `GET /api/mal/me`, `POST /api/mal/disconnect`, `POST /api/mal/sync`, `GET|POST /api/mal/list`, `PUT|DELETE /api/mal/list/:malAnimeId`, `POST /api/mal/progress` |
 
 All list endpoints support `page`/`limit` pagination (`data` + `meta` envelope),
 `sort` where relevant, and are cached (`X-Cache: HIT|MISS`). Full request/response
@@ -219,7 +223,7 @@ cp .env.example .env
 node scripts/generate-secrets.mjs   # paste JWT_ACCESS_SECRET / JWT_REFRESH_SECRET
 npm run migrate                     # applies db/migrations/*
 npm run dev                         # watch mode on :3000 (default)
-npm test                            # 69 unit tests (node:test + supertest)
+npm test                            # 111 unit tests (node:test + supertest)
 ```
 
 ### Docker
@@ -233,6 +237,44 @@ docker compose up -d --build        # Postgres 16 + API (migrations run on boot)
 The compose stack refuses to start without `POSTGRES_PASSWORD`, both JWT
 secrets and an explicit `CORS_ORIGIN` (no `*` in production — the app throws at
 startup). The API container runs as non-root.
+
+## 4b. MyAnimeList sync
+
+Full OAuth 2.0 PKCE (S256) flow, with the user's MAL tokens stored
+**encrypted at rest** (AES-256-GCM) — they never leave the server.
+
+* `GET /api/mal/connect` (JWT) persists a PKCE pair server-side
+  (`pending_mal_oauth`, keyed by `state`) and returns `{ authorizeUrl }` as
+  JSON. The SPA fetches this with its Bearer token, then redirects the
+  browser — a plain link would 401.
+* `GET /api/mal/callback` consumes the pending state atomically, exchanges
+  the code, fetches the MAL profile, stores the encrypted tokens and
+  redirects to `${FRONTEND_URL}/profile#mal=connected|denied|expired|error`.
+* Expired access tokens are refreshed automatically (lazy, on demand); a dead
+  refresh token yields `401 — reconnect`.
+* `POST /api/mal/sync` pulls the full list (paged, `id_mal` matching against
+  the catalog, pruned only after a complete fetch). List CRUD round-trips to
+  MAL v2; `POST /api/mal/progress` lets the player auto-update episodes
+  watched when an episode is finished.
+
+Required env (see `.env.example`):
+
+| Var | Notes |
+|---|---|
+| `MAL_CLIENT_ID` | public MAL app client id (myanimelist.net/apiconfig) |
+| `MAL_CLIENT_SECRET` | optional for PKCE, but set it |
+| `MAL_TOKEN_ENCRYPTION_KEY` | 32-byte key (raw/base64/hex) for AES-GCM token encryption |
+| `FRONTEND_URL` | where the callback redirects the browser after linking |
+
+The MAL app's registered redirect URI must be a single URL:
+`{BACKEND_URL}/api/mal/callback` (e.g. `http://192.168.0.193:3000/api/mal/callback`).
+
+Live verification (no real MAL needed — runs the real flow against a local
+mock of myanimelist.net):
+
+```bash
+node scripts/verify-mal-oauth.mjs
+```
 
 ---
 
