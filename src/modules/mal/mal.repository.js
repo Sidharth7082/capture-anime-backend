@@ -118,7 +118,7 @@ export function createMalRepository(pool) {
                is_rewatching = EXCLUDED.is_rewatching,
                updated_at = EXCLUDED.updated_at
          RETURNING id, mal_anime_id AS "malAnimeId", anime_id AS "animeId"`,
-        [userId, malAnimeId, animeId, status, score, episodesWatched, isRewatching, rewatchCount, updatedAt],
+        [userId, malAnimeId, animeId, status, score, episodesWatched, rewatchCount, isRewatching, updatedAt],
       );
       return rows[0];
     },

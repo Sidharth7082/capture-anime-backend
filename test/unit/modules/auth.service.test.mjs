@@ -279,3 +279,34 @@ test('pruneExpiredTokens removes expired rows', async () => {
   assert.equal(pruned, 1);
   assert.ok(repo.tokens.has('live-hash'));
 });
+
+test('refresh rejects a token that does not belong to its user', async () => {
+  const user = await service.register({ username: 'alice', email: 'alice@example.com', password: 'password123' });
+  const { tokens } = await service.login({ identifier: 'alice', password: 'password123' });
+  const stored = repo.tokens.get(hashToken(tokens.refreshToken));
+  stored.user_id = 'some-other-user'; // tamper
+  await assert.rejects(service.refresh(tokens.refreshToken), (err) => err.status === 401 && /does not match/.test(err.message));
+});
+
+test('refresh treats a rotated (replayed) token as replay and kills the family', async () => {
+  const user = await service.register({ username: 'bob', email: 'bob@example.com', password: 'password123' });
+  const { tokens } = await service.login({ identifier: 'bob', password: 'password123' });
+  // First use rotates the token; the second use of the SAME token is a replay.
+  await service.refresh(tokens.refreshToken);
+  const callsBefore = repo.calls.revokeAll;
+  await assert.rejects(service.refresh(tokens.refreshToken), (err) => err.status === 401);
+  assert.equal(repo.calls.revokeAll, callsBefore + 1, 'token family revoked on replay');
+});
+
+test('refresh rejects a disabled account', async () => {
+  await service.register({ username: 'carol', email: 'carol@example.com', password: 'password123' });
+  const { tokens } = await service.login({ identifier: 'carol', password: 'password123' });
+  repo.users.find((u) => u.username === 'carol').status = 'disabled';
+  await assert.rejects(service.refresh(tokens.refreshToken), (err) => err.status === 401);
+});
+
+test('login rejects a disabled account', async () => {
+  await service.register({ username: 'dave', email: 'dave@example.com', password: 'password123' });
+  repo.users.find((u) => u.username === 'dave').status = 'disabled';
+  await assert.rejects(service.login({ identifier: 'dave', password: 'password123' }), (err) => err.status === 403);
+});

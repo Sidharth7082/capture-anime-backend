@@ -23,7 +23,8 @@
     "start": "node src/server.js",
     "test": "node --test 'test/unit/**/*.test.mjs'",
     "secrets": "node scripts/generate-secrets.mjs",
-    "catalog:verify": "cd importer && npm run verify-catalog"
+    "catalog:verify": "cd importer && npm run verify-catalog",
+    "bench": "node scripts/bench/http.mjs"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",

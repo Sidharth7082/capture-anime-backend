@@ -402,3 +402,49 @@ test('mal connect reports exactly which env vars are missing (503)', async () =>
   assert.match(res.body.error.message, /MAL_CLIENT_ID/);
   assert.match(res.body.error.message, /MAL_TOKEN_ENCRYPTION_KEY/);
 });
+
+test('watch endpoints: stream + prefetch + 404 + validation', async () => {
+  const app = buildApp({
+    watch: {
+      watch: async (animeId, episode, opts) => {
+        if (animeId === 999) {
+          const err = new Error('not found');
+          err.status = 404;
+          err.expose = true;
+          throw err;
+        }
+        return { url: `http://stream/${animeId}/${episode}`, provider: opts.provider };
+      },
+      prefetch: async (animeId, count) => ({ prefetched: count }),
+    },
+  });
+  const ok = await request(app).get('/api/watch/7/3').query({ provider: 'gogoanime', audio: 'sub' });
+  assert.equal(ok.status, 200);
+  assert.equal(ok.body.url, 'http://stream/7/3');
+  assert.equal(ok.body.provider, 'gogoanime');
+
+  const prefetch = await request(app).get('/api/watch/7/prefetch').query({ count: 3 });
+  assert.equal(prefetch.status, 200);
+  assert.deepEqual(prefetch.body, { prefetched: 3 });
+
+  const bad = await request(app).get('/api/watch/not-a-number/3');
+  assert.equal(bad.status, 400, 'invalid animeId rejected');
+
+  const missing = await request(app).get('/api/watch/999/1');
+  assert.equal(missing.status, 404, 'unknown anime 404s');
+});
+
+test('watch service errors surface with their status', async () => {
+  const app = buildApp({
+    watch: {
+      watch: async () => {
+        const err = new Error('provider unavailable');
+        err.status = 502;
+        err.expose = true;
+        throw err;
+      },
+    },
+  });
+  const res = await request(app).get('/api/watch/7/1');
+  assert.equal(res.status, 502);
+});

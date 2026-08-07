@@ -218,9 +218,11 @@ curl http://localhost:9090/health
 
 | Suite | Where | Command |
 |---|---|---|
-| Backend (unit + route tests, supertest + fakes) | `test/` | `npm test` (111 tests) |
-| Importer (normalizer/validator/runner/upsert with in-memory fakes) | `importer/src/**/*.test.ts` | `cd importer && npm test` (41 tests) |
+| Backend (unit + route tests, supertest + fakes) | `test/` | `npm test` (144 tests) |
+| **DB-backed repository + integrity tests** (real schema on PGlite: migrations, unique/FK/cascade, transactions, advisory locks, auth/user/mal/anime repositories) | `test/unit/db/` | part of `npm test` |
+| Importer (normalizer/validator/runner/upsert with in-memory fakes) | `importer/src/**/*.test.ts` | `cd importer && npm test` (67 tests) |
 | Ops smoke checks | `scripts/` | `npm run db:verify`, `npm run verify-setup` |
+| HTTP-layer throughput bench | `scripts/bench/http.mjs` | `npm run bench` |
 
 ## Feature roadmap (current focus)
 
