@@ -24,6 +24,9 @@ const envSchema = z.object({
 
   // Explicit cookie/secure override; defaults to NODE_ENV === 'production'.
   COOKIE_SECURE: z.enum(['true', 'false']).optional(),
+  // Secret for signed cookies (PKCE OAuth state for MAL). Falls back to
+  // JWT_ACCESS_SECRET when not set.
+  COOKIE_SECRET: z.string().min(16).optional(),
   // Swagger UI: enabled by default outside production, can be forced on/off.
   SWAGGER_ENABLED: z.enum(['true', 'false']).optional(),
 
@@ -48,6 +51,18 @@ const envSchema = z.object({
   ANIVEXA_TIMEOUT_MS: z.coerce.number().int().positive().default(15_000),
   ANIVEXA_MAX_PARALLEL: z.coerce.number().int().positive().max(10).default(3),
   ANIVEXA_PREFETCH_EPISODES: z.coerce.number().int().min(0).max(50).default(3),
+
+  // --- MyAnimeList OAuth sync ------------------------------------------------
+  // Public MAL app credentials (https://myanimelist.net/apiconfig). Optional:
+  // when absent, /api/mal returns 503 "MAL not configured".
+  MAL_CLIENT_ID: z.string().min(1).optional(),
+  MAL_CLIENT_SECRET: z.string().optional(),
+  // 32-byte key (raw/base64/hex) for encrypting MAL tokens at rest.
+  MAL_TOKEN_ENCRYPTION_KEY: z.string().min(16).optional(),
+  // Where the frontend lives — the OAuth callback redirects back here
+  // (defaults to the Vite dev server).
+  FRONTEND_URL: z.string().url().default('http://localhost:5173'),
+  MAL_API_TIMEOUT_MS: z.coerce.number().int().positive().default(10_000),
 });
 
 const parsed = envSchema.safeParse(process.env);

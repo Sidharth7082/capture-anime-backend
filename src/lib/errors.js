@@ -34,4 +34,12 @@ export class ApiError extends Error {
   static conflict(message = 'Conflict') {
     return new ApiError(409, 'CONFLICT', message);
   }
+
+  static serviceUnavailable(message = 'Service unavailable') {
+    return new ApiError(503, 'SERVICE_UNAVAILABLE', message);
+  }
+
+  static badGateway(message = 'Bad gateway') {
+    return new ApiError(502, 'BAD_GATEWAY', message);
+  }
 }

@@ -548,6 +548,213 @@ paths:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
         '401': { $ref: '#/components/responses/Unauthorized' }
 
+  /api/mal/connect:
+    get:
+      tags: [mal]
+      summary: Start MyAnimeList OAuth (PKCE). Redirects to MAL; callback returns to the frontend.
+      security: [{ BearerAuth: [] }]
+      responses:
+        '302':
+          description: Redirect to myanimelist.net authorize URL
+        '503':
+          description: MAL not configured
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /api/mal/callback:
+    get:
+      tags: [mal]
+      summary: MAL OAuth callback (browser redirect, no auth)
+      parameters:
+        - { name: code, in: query, schema: { type: string } }
+        - { name: state, in: query, schema: { type: string } }
+        - { name: error, in: query, schema: { type: string } }
+      responses:
+        '302':
+          description: Redirect to FRONTEND_URL/profile#mal=connected|error|denied|expired
+
+  /api/mal/me:
+    get:
+      tags: [mal]
+      summary: Linked MAL profile (tokens never leave the server)
+      security: [{ BearerAuth: [] }]
+      responses:
+        '200':
+          description: Connection state
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [connected, user]
+                properties:
+                  connected: { type: boolean }
+                  user:
+                    type: object
+                    nullable: true
+                    properties:
+                      id: { type: integer }
+                      name: { type: string }
+                      picture: { type: string, nullable: true }
+                      tokenExpiresAt: { type: string, format: date-time }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /api/mal/disconnect:
+    post:
+      tags: [mal]
+      summary: Unlink the MAL account and drop synced entries
+      security: [{ BearerAuth: [] }]
+      responses:
+        '200':
+          description: Unlinked
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /api/mal/sync:
+    post:
+      tags: [mal]
+      summary: Pull the user's full MAL list into the local database
+      security: [{ BearerAuth: [] }]
+      responses:
+        '200':
+          description: Sync result
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [synced, matched, removed]
+                properties:
+                  synced: { type: integer }
+                  matched: { type: integer }
+                  removed: { type: integer }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '502':
+          description: MAL API failure
+
+  /api/mal/list:
+    get:
+      tags: [mal]
+      summary: Paginated synced list, optionally filtered by status
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Limit'
+        - { name: status, in: query, schema: { $ref: '#/components/schemas/MalStatus' } }
+      responses:
+        '200':
+          description: Entries
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, meta]
+                properties:
+                  data: { type: array, items: { $ref: '#/components/schemas/MalListEntry' } }
+                  meta: { $ref: '#/components/schemas/PaginationMeta' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    post:
+      tags: [mal]
+      summary: Add an anime to the user's MAL list
+      security: [{ BearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [malAnimeId, status]
+              properties:
+                malAnimeId: { type: integer, minimum: 1 }
+                status: { $ref: '#/components/schemas/MalStatus' }
+                score: { type: integer, minimum: 0, maximum: 10 }
+                episodesWatched: { type: integer, minimum: 0 }
+      responses:
+        '200':
+          description: Entry added/updated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MalListEntry' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /api/mal/list/{malAnimeId}:
+    put:
+      tags: [mal]
+      summary: Update a MAL list entry (status, score, episodes watched, rewatch)
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - { name: malAnimeId, in: path, required: true, schema: { type: integer, minimum: 1 } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                status: { $ref: '#/components/schemas/MalStatus' }
+                score: { type: integer, minimum: 0, maximum: 10 }
+                episodesWatched: { type: integer, minimum: 0 }
+                isRewatching: { type: boolean }
+                rewatchCount: { type: integer, minimum: 0 }
+      responses:
+        '200':
+          description: Updated entry
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MalListEntry' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    delete:
+      tags: [mal]
+      summary: Remove an anime from the user's MAL list
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - { name: malAnimeId, in: path, required: true, schema: { type: integer, minimum: 1 } }
+      responses:
+        '200':
+          description: Removed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /api/mal/progress:
+    post:
+      tags: [mal]
+      summary: Auto-update MAL episode progress from the player
+      description: >-
+        Updates MAL only when the anime is already on the user's MAL list;
+        otherwise returns updated:false.
+      security: [{ BearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [animeId, episodeNumber]
+              properties:
+                animeId: { type: integer, minimum: 1 }
+                episodeNumber: { type: integer, minimum: 1 }
+      responses:
+        '200':
+          description: Progress result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  updated: { type: boolean }
+                  reason: { type: string }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
   /api/watch/{animeId}/prefetch:
     get:
       tags: [Watch]
@@ -973,6 +1180,34 @@ components:
           properties:
             id: { type: integer }
             title: { type: string }
+            coverImageLarge: { type: string, nullable: true }
+            coverImageMedium: { type: string, nullable: true }
+            format: { type: string, nullable: true }
+            episodes: { type: integer, nullable: true }
+
+    MalStatus:
+      type: string
+      enum: [watching, completed, on_hold, dropped, plan_to_watch]
+
+    MalListEntry:
+      type: object
+      properties:
+        id: { type: integer }
+        malAnimeId: { type: integer }
+        animeId: { type: integer, nullable: true }
+        status: { $ref: '#/components/schemas/MalStatus' }
+        score: { type: integer }
+        episodesWatched: { type: integer }
+        rewatchCount: { type: integer }
+        isRewatching: { type: boolean }
+        updatedAt: { type: string, format: date-time }
+        anime:
+          type: object
+          nullable: true
+          properties:
+            id: { type: integer }
+            malId: { type: integer, nullable: true }
+            title: { type: string, nullable: true }
             coverImageLarge: { type: string, nullable: true }
             coverImageMedium: { type: string, nullable: true }
             format: { type: string, nullable: true }

@@ -1,0 +1,9 @@
+process.env.NODE_ENV = 'test';
+process.env.DATABASE_URL ??= 'postgres://test@127.0.0.1:5432/test_db';
+process.env.JWT_ACCESS_SECRET ??= 'e2e-access-secret-0123456789abcdef0123456789abcdef';
+process.env.JWT_REFRESH_SECRET ??= 'e2e-refresh-secret-0123456789abcdef0123456789abcdef';
+process.env.MAL_CLIENT_ID ??= 'e2e-mal-client';
+process.env.MAL_CLIENT_SECRET ??= 'e2e-mal-secret';
+process.env.MAL_TOKEN_ENCRYPTION_KEY ??= '0123456789abcdef0123456789abcdef';
+process.env.FRONTEND_URL ??= 'http://frontend.test:5173';
+process.env.LOG_LEVEL ??= 'error';

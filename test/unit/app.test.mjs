@@ -2,6 +2,7 @@ import '../helpers/env.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import request from 'supertest';
+import cookieSignature from 'cookie-signature';
 import { createApp } from '../../src/app.js';
 import { TtlCache } from '../../src/lib/cache.js';
 import { ApiError } from '../../src/lib/errors.js';
@@ -55,7 +56,29 @@ function makeFakes(overrides = {}) {
     ...overrides.user,
   };
 
-  return { animeService, authService, userService };
+  const watchService = {
+    ...overrides.watch,
+  };
+
+  const malService = {
+    configured: true,
+    buildAuthorizeUrl: (userId) => ({
+      url: 'https://myanimelist.net/v1/oauth2/authorize?response_type=code&client_id=x&code_challenge=ch&code_challenge_method=S256&state=s',
+      payload: { verifier: 'v', state: 's', userId },
+    }),
+    handleCallback: async () => ({ malUser: { id: 123, name: 'tester' } }),
+    getMe: async () => ({ connected: true, user: { id: 123, name: 'tester', picture: null } }),
+    disconnect: async () => ({ success: true }),
+    syncList: async () => ({ synced: 2, matched: 1, removed: 0 }),
+    listEntries: async () => ({ items: [{ malAnimeId: 16498, status: 'watching' }], total: 1 }),
+    updateEntry: async (userId, malAnimeId, patch) => ({ malAnimeId, entry: { ...patch } }),
+    addEntry: async (userId, body) => ({ malAnimeId: body.malAnimeId, entry: body }),
+    removeEntry: async () => ({ success: true }),
+    updateProgress: async () => ({ updated: false, reason: 'not_on_mal_list' }),
+    ...overrides.mal,
+  };
+
+  return { animeService, authService, userService, watchService, malService };
 }
 
 function buildApp(overrides, cache, cacheTtlMs) {
@@ -66,7 +89,6 @@ function buildApp(overrides, cache, cacheTtlMs) {
     cacheTtlMs: cacheTtlMs ?? 0,
   });
 }
-
 test('GET /api/anime returns paginated envelope', async () => {
   const app = buildApp();
   const res = await request(app).get('/api/anime?page=1&limit=5');
@@ -282,6 +304,81 @@ test('unknown routes return a JSON 404', async () => {
   const res = await request(app).get('/api/nope');
   assert.equal(res.status, 404);
   assert.equal(res.body.error.code, 'NOT_FOUND');
+});
+
+test('mal connect requires auth and redirects to MAL when authenticated', async () => {
+  const app = buildApp();
+  const anon = await request(app).get('/api/mal/connect');
+  assert.equal(anon.status, 401);
+
+  const token = signAccessToken({ id: 'u1', username: 'alice', role: 'viewer' });
+  const res = await request(app).get('/api/mal/connect').set('Authorization', `Bearer ${token}`);
+  assert.equal(res.status, 302);
+  assert.match(res.headers.location, /^https:\/\/myanimelist\.net\/v1\/oauth2\/authorize/);
+  assert.ok(res.headers['set-cookie'][0].includes('mal_oauth'), 'PKCE state cookie set');
+  assert.ok(res.headers['set-cookie'][0].includes('HttpOnly'));
+  assert.ok(res.headers['set-cookie'][0].includes('SameSite=Lax'));
+});
+
+test('mal callback without the signed cookie redirects with an error hash', async () => {
+  const app = buildApp();
+  const res = await request(app).get('/api/mal/callback?code=x&state=y');
+  assert.equal(res.status, 302);
+  assert.match(res.headers.location, /#mal=error$/);
+});
+
+test('mal callback with a valid cookie redirects to the frontend', async () => {
+  const app = buildApp();
+  const payload = JSON.stringify({ verifier: 'v', state: 's', userId: 'u1' });
+  const signed = 's:' + cookieSignature.sign(payload, process.env.JWT_ACCESS_SECRET);
+  const res = await request(app)
+    .get('/api/mal/callback?code=x&state=s')
+    .set('Cookie', `mal_oauth=${encodeURIComponent(signed)}`);
+  assert.equal(res.status, 302);
+  assert.match(res.headers.location, /#mal=connected$/);
+});
+
+test('mal endpoints require auth and validate input', async () => {
+  const app = buildApp();
+  const token = signAccessToken({ id: 'u1', username: 'alice', role: 'viewer' });
+  const auth = (r) => r.set('Authorization', `Bearer ${token}`);
+
+  assert.equal((await request(app).get('/api/mal/me')).status, 401);
+  assert.equal((await request(app).get('/api/mal/list')).status, 401);
+
+  const me = await auth(request(app).get('/api/mal/me'));
+  assert.equal(me.status, 200);
+  assert.equal(me.body.connected, true);
+
+  const list = await auth(request(app).get('/api/mal/list?status=watching'));
+  assert.equal(list.status, 200);
+  assert.equal(list.body.data[0].malAnimeId, 16498);
+
+  const badStatus = await auth(request(app).get('/api/mal/list?status=bogus'));
+  assert.equal(badStatus.status, 400);
+
+  const emptyPatch = await auth(request(app).put('/api/mal/list/16498')).send({});
+  assert.equal(emptyPatch.status, 400);
+
+  const add = await auth(request(app).post('/api/mal/list')).send({ malAnimeId: 16498, status: 'watching' });
+  assert.equal(add.status, 200);
+
+  const badAdd = await auth(request(app).post('/api/mal/list')).send({ status: 'watching' });
+  assert.equal(badAdd.status, 400);
+
+  const progress = await auth(request(app).post('/api/mal/progress')).send({ animeId: 1, episodeNumber: 3 });
+  assert.equal(progress.status, 200);
+  assert.equal(progress.body.updated, false);
+
+  const badProgress = await auth(request(app).post('/api/mal/progress')).send({ animeId: 1 });
+  assert.equal(badProgress.status, 400);
+
+  const sync = await auth(request(app).post('/api/mal/sync'));
+  assert.equal(sync.status, 200);
+  assert.equal(sync.body.synced, 2);
+
+  const remove = await auth(request(app).delete('/api/mal/list/16498'));
+  assert.equal(remove.status, 200);
 });
 
 test('swagger spec is served', async () => {
