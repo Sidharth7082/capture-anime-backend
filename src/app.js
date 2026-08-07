@@ -135,6 +135,20 @@ export function createApp({ authService, animeService, userService, watchService
       ? env.SWAGGER_ENABLED === 'true'
       : env.NODE_ENV !== 'production';
   if (swaggerEnabled) {
+    // Swagger UI's bundle uses `new Function` internally, which the global
+    // helmet CSP (`script-src 'self'` without `'unsafe-eval'`) blocks, causing
+    // a blank page. Relax CSP for /api-docs only — the rest of the API keeps
+    // the strict policy.
+    app.use('/api-docs', (_req, res, next) => {
+      res.setHeader(
+        'Content-Security-Policy',
+        "default-src 'self';base-uri 'self';font-src 'self' https: data:;form-action 'self';" +
+          "frame-ancestors 'self';img-src 'self' data:;object-src 'none';" +
+          "script-src 'self' 'unsafe-eval';script-src-attr 'none';" +
+          "style-src 'self' https: 'unsafe-inline';upgrade-insecure-requests",
+      );
+      next();
+    });
     app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(openapiSpec, {
       customSiteTitle: 'Anime Platform API',
     }));
