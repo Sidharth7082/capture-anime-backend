@@ -72,7 +72,21 @@ export function createApp({ authService, animeService, userService, watchService
   app.disable('x-powered-by');
 
   // --- global middleware ---------------------------------------------------
-  app.use(helmet());
+  // This service is HTTP-only (home LAN, no TLS termination in front yet).
+  // Helmet's default HSTS + `upgrade-insecure-requests` would force browsers
+  // to fetch subresources over HTTPS, failing on a plain-HTTP server with
+  // ERR_CONNECTION_CLOSED. Disable both; keep the rest of the strict headers.
+  app.use(
+    helmet({
+      strictTransportSecurity: false,
+      contentSecurityPolicy: {
+        directives: {
+          ...helmet.contentSecurityPolicy.getDefaultDirectives(),
+          'upgrade-insecure-requests': null,
+        },
+      },
+    }),
+  );
   app.use(cors({ origin: corsOrigin(), credentials: true }));
   app.use(express.json({ limit: '100kb' }));
   // Signed cookies: unsigned cookies keep working via req.cookies (refresh
@@ -145,7 +159,7 @@ export function createApp({ authService, animeService, userService, watchService
         "default-src 'self';base-uri 'self';font-src 'self' https: data:;form-action 'self';" +
           "frame-ancestors 'self';img-src 'self' data:;object-src 'none';" +
           "script-src 'self' 'unsafe-eval';script-src-attr 'none';" +
-          "style-src 'self' https: 'unsafe-inline';upgrade-insecure-requests",
+          "style-src 'self' https: 'unsafe-inline'",
       );
       next();
     });
