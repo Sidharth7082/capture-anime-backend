@@ -41,6 +41,17 @@ function makeFakes(overrides = {}) {
     addFavorite: async () => ({ id: 1, created: true }),
     removeFavorite: async () => ({ success: true }),
     listHistory: async () => ({ data: [], meta: META }),
+    addHistory: async () => ({ history: { id: 1, episodeId: 42 } }),
+    listContinueWatching: async () => ({
+      data: [{ id: 1, animeId: 7, episodeNumber: 3, playbackPositionSeconds: 150, durationSeconds: 1440, anime: { id: 7, title: 'AoT' } }],
+      meta: META,
+    }),
+    saveContinueWatching: async (userId, animeId, body) => ({
+      animeId,
+      episodeNumber: body.episodeNumber,
+      playbackPositionSeconds: body.playbackPositionSeconds,
+    }),
+    removeContinueWatching: async () => ({ success: true }),
     ...overrides.user,
   };
 
@@ -171,10 +182,17 @@ test('POST /api/auth/logout', async () => {
 
 test('user endpoints require a bearer token', async () => {
   const app = buildApp();
-  for (const path of ['/api/user/profile', '/api/user/favorites', '/api/user/history']) {
+  for (const path of [
+    '/api/user/profile',
+    '/api/user/favorites',
+    '/api/user/history',
+    '/api/user/continue-watching',
+  ]) {
     const res = await request(app).get(path);
     assert.equal(res.status, 401, `${path} should be protected`);
   }
+  const put = await request(app).put('/api/user/continue-watching/1').send({});
+  assert.equal(put.status, 401, 'PUT continue-watching should be protected');
 });
 
 test('user endpoints accept a valid access token', async () => {
@@ -211,6 +229,52 @@ test('DELETE /api/user/favorites/:id validates id', async () => {
     .delete('/api/user/favorites/not-a-number')
     .set('Authorization', `Bearer ${token}`);
   assert.equal(res.status, 400);
+});
+
+test('POST /api/user/history records a watched episode', async () => {
+  const app = buildApp();
+  const token = signAccessToken({ id: 'u1', username: 'alice', role: 'viewer' });
+
+  const ok = await request(app)
+    .post('/api/user/history')
+    .set('Authorization', `Bearer ${token}`)
+    .send({ animeId: 7, episode: 3 });
+  assert.equal(ok.status, 200);
+  assert.equal(ok.body.history.episodeId, 42);
+
+  const bad = await request(app)
+    .post('/api/user/history')
+    .set('Authorization', `Bearer ${token}`)
+    .send({ animeId: 'x' });
+  assert.equal(bad.status, 400);
+});
+
+test('continue-watching list, save and remove', async () => {
+  const app = buildApp();
+  const token = signAccessToken({ id: 'u1', username: 'alice', role: 'viewer' });
+  const auth = (r) => r.set('Authorization', `Bearer ${token}`);
+
+  const list = await auth(request(app).get('/api/user/continue-watching'));
+  assert.equal(list.status, 200);
+  assert.equal(list.body.data[0].animeId, 7);
+
+  const save = await auth(request(app).put('/api/user/continue-watching/7')).send({
+    episodeNumber: 3,
+    playbackPositionSeconds: 150,
+    durationSeconds: 1440,
+  });
+  assert.equal(save.status, 200);
+  assert.equal(save.body.playbackPositionSeconds, 150);
+
+  const invalid = await auth(request(app).put('/api/user/continue-watching/7')).send({
+    episodeNumber: 0, // must be >= 1
+    playbackPositionSeconds: -1,
+  });
+  assert.equal(invalid.status, 400);
+
+  const removed = await auth(request(app).delete('/api/user/continue-watching/7'));
+  assert.equal(removed.status, 200);
+  assert.deepEqual(removed.body, { success: true });
 });
 
 test('unknown routes return a JSON 404', async () => {
