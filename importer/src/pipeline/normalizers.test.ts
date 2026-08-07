@@ -4,7 +4,7 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { normalizeAnimeItem, type JikanAnime } from "./normalizers.js";
+import { normalizeAnimeItem, normalizeAnimeEnrichment, type JikanAnime } from "./normalizers.js";
 
 const BASE: JikanAnime = {
   mal_id: 16498,
@@ -172,4 +172,62 @@ test("metadata normalization drops invalid and duplicate entries", () => {
   assert.deepEqual(row.genres, [{ malId: 1, name: "Action" }]);
   assert.deepEqual(row.studios, []);
   assert.deepEqual(row.producers, []);
+});
+
+test("enrichment bundle normalizes characters, staff, relations, recs, pictures, videos", () => {
+  const row = normalizeAnimeEnrichment({
+    mal_id: 1,
+    characters: [
+      {
+        character: { mal_id: 3, name: "Black, Jet", name_kanji: "ジェット", images: { jpg: { image_url: "http://x/j.jpg" } } },
+        role: "Main",
+        voice_actors: [{ person: { mal_id: 357, name: "Ishizuka, Unshou" }, language: "Japanese" }],
+      },
+    ],
+    staff: [{ person: { mal_id: 6519, name: "Minami, Masahiko" }, positions: ["Producer", "Producer"] }],
+    relations: [{ relation: "Adaptation", entry: [{ mal_id: 173, type: "manga", name: "Cowboy Bebop" }] }],
+    recommendations: [{ entry: { mal_id: 205, title: "Samurai Champloo" }, votes: 100 }],
+    pictures: [{ jpg: { image_url: "http://x/p.jpg", large_image_url: "http://x/pl.jpg" }, webp: { image_url: "http://x/p.webp" } }],
+    videos: {
+      promo: [{ title: "PV 1", trailer: { youtube_id: "abc", embed_url: "http://e" } }],
+      episodes: [{ episode: "Episode 26", title: "The Real Folk Blues (part 2)" }],
+    },
+  });
+  assert.equal(row.idMal, 1);
+  assert.equal(row.characters.length, 1);
+  assert.equal(row.characters[0]!.role, "MAIN");
+  assert.equal(row.characters[0]!.sortOrder, 0);
+  assert.equal(row.characters[0]!.voiceActors[0]!.language, "Japanese");
+  assert.equal(row.staff.length, 1);
+  assert.deepEqual(row.staff[0]!.positions, ["Producer", "Producer"]);
+  assert.deepEqual(row.relations, [{ malId: 173, mediaType: "manga", name: "Cowboy Bebop", relation: "Adaptation" }]);
+  assert.deepEqual(row.recommendations, [{ malId: 205, title: "Samurai Champloo", votes: 100 }]);
+  assert.deepEqual(row.pictures[0]!, { imageUrl: "http://x/p.jpg", largeImageUrl: "http://x/pl.jpg", webpUrl: "http://x/p.webp" });
+  assert.equal(row.videos.length, 2);
+  assert.equal(row.videos[0]!.kind, "promo");
+  assert.equal(row.videos[0]!.youtubeId, "abc");
+  assert.equal(row.videos[1]!.kind, "episode");
+  assert.equal(row.videos[1]!.episodeNumber, 26);
+  assert.equal(row.failedEndpoints.length, 0);
+});
+
+test("enrichment drops invalid entries and maps unknown roles to BACKGROUND", () => {
+  const row = normalizeAnimeEnrichment({
+    mal_id: 2,
+    characters: [
+      { character: { mal_id: 9, name: "Good" }, role: "Supporting" },
+      { character: { mal_id: 9, name: "Dup" } }, // duplicate mal_id
+      { character: { name: "No Id" } }, // missing mal_id
+      null,
+    ] as never,
+    recommendations: [{ entry: { mal_id: 5, title: "" } }, { entry: {} }] as never,
+    pictures: [{ jpg: { image_url: null } }] as never,
+    videos: { episodes: [{ episode: "Episode 3", title: "" }] },
+  });
+  assert.equal(row.characters.length, 1);
+  assert.equal(row.characters[0]!.role, "SUPPORTING");
+  assert.equal(row.recommendations.length, 0);
+  assert.equal(row.pictures.length, 0);
+  assert.equal(row.videos.length, 1);
+  assert.equal(row.videos[0]!.episodeNumber, 3);
 });

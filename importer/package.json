@@ -12,6 +12,7 @@
     "build": "tsc -p tsconfig.json",
     "start": "node dist/index.js",
     "import:anime": "tsx src/run-import.ts",
+    "import:enrich": "tsx src/run-import.ts --enrich",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "tsx --test \"src/**/*.test.ts\" \"src/*.test.ts\""
   },

@@ -27,6 +27,7 @@ const envSchema = z.object({
   JIKAN_TIMEOUT_MS: z.coerce.number().int().positive().default(15_000),
   JIKAN_RETRY_COUNT: z.coerce.number().int().min(0).max(10).default(3),
   JIKAN_PAGE_DELAY_MS: z.coerce.number().int().min(0).default(150),
+  ENRICH_BATCH_SIZE: z.coerce.number().int().min(1).max(500).default(10),
 
   DATABASE_URL: z.string().min(1, "DATABASE_URL is required"),
   PG_POOL_MAX: z.coerce.number().int().min(1).max(100).default(5),
@@ -131,6 +132,7 @@ async function main(): Promise<void> {
     typesense,
     metrics,
     pageDelayMs: env.JIKAN_PAGE_DELAY_MS,
+    enrichBatchSize: env.ENRICH_BATCH_SIZE,
     logger,
   });
 

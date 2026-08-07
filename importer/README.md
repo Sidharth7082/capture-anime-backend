@@ -138,9 +138,10 @@ Covered fields: mal_id, titles (romaji/english/native/synonyms), description,
 type→format, status, source, episodes, duration, aired dates, season/year,
 score (×10 → 0–100), members→popularity, favorites, is_adult (Rx rating),
 cover images, and **all six metadata groups** (genres, studios, producers,
-licensors, themes, demographics — linked + pruned per anime). Everything
-else (trailers, banner, characters, episodes rows) stays untouched for
-later stages.
+licensors, themes, demographics — linked + pruned per anime). Stage 4 adds
+**characters, voice actors, staff (with positions), relations,
+recommendations, pictures and videos** per anime. Everything else (episodes
+rows, trailers in `anime.trailer_*`) stays untouched for later stages.
 
 ### Stage 2 metadata (genres · studios · producers · licensors · themes · demographics)
 
@@ -193,6 +194,7 @@ curl http://localhost:9090/health
 | `JIKAN_API_URL` | `http://192.168.0.193:8081` | base URL of the local Jikan v4 API |
 | `JIKAN_TIMEOUT_MS` | `15000` | per-request timeout |
 | `JIKAN_RETRY_COUNT` | `3` | retries with backoff (429-aware) |
+| `ENRICH_BATCH_SIZE` | `10` | anime per enrichment page (each = 6 detail requests) |
 | `DATABASE_URL` | — | PostgreSQL connection string |
 | `PG_POOL_MAX` | `5` | pool size |
 | `TYPESENSE_ENABLED` | `false` | `true` indexes every imported page |

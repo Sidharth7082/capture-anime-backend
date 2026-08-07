@@ -15,14 +15,16 @@
 import type { JikanClient } from "./jikan.js";
 import type { Database } from "./database.js";
 import type { TypesenseClient } from "./typesense.js";
+import { createNoopSink } from "./typesense.js";
 import type { Metrics } from "./metrics.js";
-import { createJikanAnimeFetcher } from "./pipeline/fetchers.js";
-import { normalizeAnimeItem, type JikanAnime } from "./pipeline/normalizers.js";
-import { validateAnimeRow } from "./pipeline/validator.js";
+import { createJikanAnimeFetcher, createJikanEnrichFetcher } from "./pipeline/fetchers.js";
+import { normalizeAnimeItem, normalizeAnimeEnrichment, type JikanAnime, type JikanEnrichmentBundle } from "./pipeline/normalizers.js";
+import { validateAnimeRow, validateAnimeEnrichment } from "./pipeline/validator.js";
 import { createAnimeUpsertService } from "./pipeline/upsert-service.js";
+import { createAnimeEnrichUpsertService } from "./pipeline/enrich-upsert-service.js";
 import { createPostgresJobStore } from "./pipeline/job-store.js";
 import { runPipeline } from "./pipeline/runner.js";
-import type { JobStore, NormalizedAnime, RunResult, Sink } from "./pipeline/types.js";
+import type { JobStore, NormalizedAnime, NormalizedAnimeEnrichment, RunResult, Sink } from "./pipeline/types.js";
 
 export interface ImportDeps {
   jikan: JikanClient;
@@ -32,6 +34,8 @@ export interface ImportDeps {
   metrics?: Metrics;
   /** Polite delay between page requests (0 to disable). */
   pageDelayMs?: number;
+  /** Enrichment batch size (anime per page, each = 6 detail requests). */
+  enrichBatchSize?: number;
   logger?: Pick<Console, "debug" | "info" | "warn" | "error">;
 }
 
@@ -110,11 +114,72 @@ export class Importer {
   }
 
   /**
-   * Scheduled entrypoint (called by the scheduler). Runs the anime import;
-   * later stages compose additional sources on top.
+   * STAGE 4: enrich the catalog's content relationships. Iterates the anime
+   * already in the DB, fetching characters / voice actors / staff / relations /
+   * recommendations / pictures / videos per anime. Same pipeline, its own
+   * `jikan-enrich` resume point. Idempotent (replace-per-anime).
    */
-  async run(): Promise<RunResult> {
-    return this.importAnime();
+  async enrichAnime(options: AnimeImportOptions = {}): Promise<RunResult> {
+    this.cancelled = false;
+    const metrics = this.deps.metrics;
+    if (!this.deps.db) {
+      // CLI --dry-run: no database to enumerate; report a clean empty run.
+      const empty: RunResult = { ok: true, fetched: 0, inserted: 0, updated: 0, failed: 0, summary: "jikan-enrich: no database (dry-run)" };
+      return empty;
+    }
+    metrics?.recordStart("jikan-enrich");
+    const batchSize = this.deps.enrichBatchSize ?? 10;
+    try {
+      const result = await runPipeline<JikanEnrichmentBundle, NormalizedAnimeEnrichment>(
+        {
+          source: "jikan-enrich",
+          fetcher: createJikanEnrichFetcher({
+            jikan: this.deps.jikan,
+            listAnime: async () => {
+              const rows = await this.deps.db.query<{ id: number; id_mal: number }>(
+                "SELECT id, id_mal FROM anime ORDER BY id_mal",
+              );
+              return rows.rows.map((r) => ({ id: r.id, idMal: r.id_mal }));
+            },
+            batchSize,
+            logger: this.logger,
+          }),
+          normalizer: normalizeAnimeEnrichment,
+          validator: validateAnimeEnrichment,
+          upsert: createAnimeEnrichUpsertService(this.deps.db),
+          jobs: this.jobs,
+          sink: createNoopSink(this.logger as Pick<Console, "debug" | "info" | "warn" | "error">) as Sink<NormalizedAnimeEnrichment>,
+          pageDelayMs: this.deps.pageDelayMs,
+          isCancelled: () => this.cancelled,
+          onProgress: (page, counts) => metrics?.recordPage("jikan-enrich", page, counts),
+          logger: this.logger,
+        },
+        options,
+      );
+      metrics?.recordEnd("jikan-enrich", result, result.ok ? "completed" : "failed");
+      return result;
+    } catch (err) {
+      metrics?.recordEnd("jikan-enrich", {
+        ok: false,
+        fetched: 0,
+        inserted: 0,
+        updated: 0,
+        failed: 0,
+        summary: String(err),
+      }, "failed", String(err));
+      throw err;
+    }
+  }
+
+  /**
+   * Scheduled entrypoint (called by the scheduler). Runs the anime import,
+   * then enriches the (possibly updated) catalog.
+   */
+  async run(): Promise<RunResult[]> {
+    const results: RunResult[] = [];
+    results.push(await this.importAnime());
+    results.push(await this.enrichAnime());
+    return results;
   }
 }
 

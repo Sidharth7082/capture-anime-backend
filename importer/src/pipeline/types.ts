@@ -106,6 +106,75 @@ export interface MetadataRef {
   name: string;
 }
 
+// --- Stage 4 enrichment (per-anime detail data) -----------------------------
+
+export interface EnrichVoiceActor {
+  malId: number;
+  name: string;
+  imageUrl: string | null;
+  /** Dub language, e.g. "Japanese" / "English". */
+  language: string | null;
+}
+
+export interface EnrichCharacter {
+  malId: number;
+  name: string;
+  nameKanji: string | null;
+  imageUrl: string | null;
+  role: "MAIN" | "SUPPORTING" | "BACKGROUND";
+  sortOrder: number;
+  voiceActors: EnrichVoiceActor[];
+}
+
+export interface EnrichStaffMember {
+  malId: number;
+  name: string;
+  imageUrl: string | null;
+  positions: string[];
+}
+
+export interface EnrichRelation {
+  malId: number;
+  mediaType: string; // 'anime' | 'manga' | ...
+  name: string;
+  relation: string; // 'Sequel' | 'Prequel' | ...
+}
+
+export interface EnrichRecommendation {
+  malId: number;
+  title: string;
+  votes: number;
+}
+
+export interface EnrichPicture {
+  imageUrl: string;
+  largeImageUrl: string | null;
+  webpUrl: string | null;
+}
+
+export interface EnrichVideo {
+  kind: "promo" | "episode";
+  title: string;
+  youtubeId: string | null;
+  url: string | null;
+  embedUrl: string | null;
+  thumbnailLarge: string | null;
+  episodeNumber: number | null;
+}
+
+/** Normalized enrichment bundle for one anime (all six detail endpoints). */
+export interface NormalizedAnimeEnrichment {
+  idMal: number;
+  /** Endpoints that failed to fetch for this anime ('' when all succeeded). */
+  failedEndpoints: string[];
+  characters: EnrichCharacter[];
+  staff: EnrichStaffMember[];
+  relations: EnrichRelation[];
+  recommendations: EnrichRecommendation[];
+  pictures: EnrichPicture[];
+  videos: EnrichVideo[];
+}
+
 /** Normalized row matching the `anime` table columns (Stage 1 subset). */
 export interface NormalizedAnime {
   idMal: number;

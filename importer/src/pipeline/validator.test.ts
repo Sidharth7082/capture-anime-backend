@@ -3,7 +3,7 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { validateAnimeRow } from "./validator.js";
+import { validateAnimeRow, validateAnimeEnrichment } from "./validator.js";
 import { normalizeAnimeItem, type JikanAnime } from "./normalizers.js";
 
 const VALID_ITEM: JikanAnime = {
@@ -74,4 +74,46 @@ test("rejects malformed metadata refs", () => {
     assert.match(bad.reason, /genres.0.malId/);
     assert.match(bad.reason, /themes.0.name/);
   }
+});
+
+test("enrichment validator accepts a full bundle and rejects broken ones", () => {
+  const ok = validateAnimeEnrichment({
+    idMal: 1,
+    failedEndpoints: [],
+    characters: [{ malId: 3, name: "Black, Jet", nameKanji: null, imageUrl: null, role: "MAIN", sortOrder: 0, voiceActors: [] }],
+    staff: [],
+    relations: [{ malId: 173, mediaType: "manga", name: "Cowboy Bebop", relation: "Adaptation" }],
+    recommendations: [],
+    pictures: [],
+    videos: [],
+  });
+  assert.equal(ok.ok, true);
+
+  const badRole = validateAnimeEnrichment({
+    idMal: 1,
+    failedEndpoints: [],
+    characters: [{ malId: 3, name: "X", nameKanji: null, imageUrl: null, role: "TOTALLY_WRONG" as never, sortOrder: 0, voiceActors: [] }],
+    staff: [],
+    relations: [],
+    recommendations: [],
+    pictures: [],
+    videos: [],
+  });
+  assert.equal(badRole.ok, false);
+  if (!badRole.ok) assert.match(badRole.reason, /characters.0.role/);
+});
+
+test("enrichment validator rejects a row where every endpoint failed", () => {
+  const check = validateAnimeEnrichment({
+    idMal: 1,
+    failedEndpoints: ["characters", "staff", "relations", "recommendations", "pictures", "videos"],
+    characters: [],
+    staff: [],
+    relations: [],
+    recommendations: [],
+    pictures: [],
+    videos: [],
+  });
+  assert.equal(check.ok, false);
+  if (!check.ok) assert.match(check.reason, /all endpoints failed/);
 });
