@@ -19,6 +19,8 @@ jobs:
       - run: npm ci
       - name: Test suite
         run: npm test
+      - name: E2E audit (real backend + migrations on WASM Postgres)
+        run: npm run test:e2e
       - name: Coverage gate (>= 90% lines)
         run: npm run test:ci
 

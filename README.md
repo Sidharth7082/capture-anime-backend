@@ -234,3 +234,14 @@ The catalog pipeline is stable and frozen except for bug fixes. Next:
 2. TMDB enrichment (movies, posters, backdrops, cast)
 3. Platform features on top: profiles, watch parties, comments, notifications,
    recommendations, admin dashboard, analytics
+
+## Production E2E audit
+
+`npm run test:e2e` boots a real instance — PGlite (WASM Postgres) applying
+the actual migrations 0001–0013, the real Express backend as a child process,
+and a client-style suite that exercises health, auth (register/login/refresh/
+logout/replay/expiry), user data, the whole anime surface, search, pagination,
+filtering, security probes, error codes, OpenAPI conformance, and DB write
+verification — 88 checks, 0 tolerance for failures. Depends on devDeps
+`@electric-sql/pglite{,-socket,-pg_textsearch}`; pg_trgm operators are skipped
+on WASM (typo search is the only behavior not exercisable there).

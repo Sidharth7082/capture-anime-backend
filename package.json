@@ -15,7 +15,7 @@
     "import": "node src/cli.js",
     "import:anime": "node src/cli.js --type ANIME --sort POPULARITY_DESC",
     "test:smoke": "node test/migrations.smoke.test.mjs",
-    "test:e2e": "node test/e2e.import.test.mjs",
+    "test:e2e": "node test/e2e/run.mjs",
     "db:start": "bash scripts/start-postgres.sh",
     "db:report": "node scripts/report-counts.mjs",
     "db:verify": "node scripts/verify-setup.mjs",
@@ -26,7 +26,8 @@
     "catalog:verify": "cd importer && npm run verify-catalog",
     "bench": "node scripts/bench/http.mjs",
     "test:coverage": "node --test --experimental-test-coverage 'test/unit/**/*.test.mjs'",
-    "test:ci": "node scripts/check-coverage.mjs"
+    "test:ci": "node scripts/check-coverage.mjs",
+    "audit:e2e": "node test/e2e/audit.mjs"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",
@@ -45,7 +46,9 @@
     "zod": "^3.25.76"
   },
   "devDependencies": {
-    "@electric-sql/pglite": "^0.2.16",
+    "@electric-sql/pglite": "^0.5.4",
+    "@electric-sql/pglite-pg_textsearch": "^0.0.6",
+    "@electric-sql/pglite-socket": "^0.2.7",
     "pg-gateway": "^0.3.0-beta.4",
     "supertest": "^7.2.2"
   }
