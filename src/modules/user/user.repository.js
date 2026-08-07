@@ -110,14 +110,20 @@ export function createUserRepository(pool) {
 
     async deleteFavorite(userId, favoriteId) {
       // Backward compatible: deletes by favorite row id OR by anime id
-      // (DELETE /api/user/favorites/:animeId).
-      const { rowCount } = await pool.query(
+      // (DELETE /api/user/favorites/:animeId). The two paths are run as
+      // separate DELETEs so a row id that coincidentally equals another
+      // favorite's anime_id can never remove two rows at once.
+      const byAnime = await pool.query(
         `DELETE FROM favorites
-          WHERE user_id = $1
-            AND (id = $2 OR (anime_id = $2 AND anime_id IS NOT NULL))`,
+          WHERE user_id = $1 AND anime_id = $2 AND anime_id IS NOT NULL`,
         [userId, favoriteId],
       );
-      return rowCount;
+      if (byAnime.rowCount > 0) return byAnime.rowCount;
+      const byId = await pool.query(
+        `DELETE FROM favorites WHERE user_id = $1 AND id = $2`,
+        [userId, favoriteId],
+      );
+      return byId.rowCount;
     },
 
     // --- watch history (write) --------------------------------------------

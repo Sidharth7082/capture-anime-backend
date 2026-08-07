@@ -24,6 +24,10 @@ const DEFAULT_PROVIDERS = ['reanime', 'anikoto', 'animegg', 'anineko', 'anidbapp
 // How long a stale (expired) watch result stays eligible for SWR serving.
 const SWR_GRACE_MS = 2 * 60 * 60 * 1000;
 
+// Upper bound for the staleWatch map (one entry per anime/ep/provider/audio +
+// auto) so a long-running process doesn't leak memory unbounded.
+const MAX_STALE_ENTRIES = 2000;
+
 export class AnivexaService {
   /**
    * @param {object} [deps]
@@ -251,9 +255,15 @@ export class AnivexaService {
         for (const p of this.orderedProviders()) {
           const slot = episodes[p];
           if (!slot) continue;
-          const list = audio === 'dub' && slot.dub.length ? slot.dub : slot.sub;
+          // Track the audio actually used: when a dub is requested but the
+          // provider has no dub list, the fallback serves the sub stream and
+          // must be labeled sub, not dub.
+          const wantDub = audio === 'dub' && slot.dub.length > 0;
+          const list = wantDub ? slot.dub : slot.sub;
           const ep = list.find((e) => Number(e.number) === Number(episode));
-          if (ep?.id) fallbackCandidates.push({ provider: p, audio, episode, path: `/${ep.id}` });
+          if (ep?.id) {
+            fallbackCandidates.push({ provider: p, audio: wantDub ? 'dub' : 'sub', episode, path: `/${ep.id}` });
+          }
         }
         normalized = await this.#probeBatches(fallbackCandidates, () => { sawError = true; });
       } catch (error) {
@@ -278,14 +288,24 @@ export class AnivexaService {
     const resolvedKey = key ?? this.#watchKey(anilistId, episode, normalized.provider, audio);
     const withMeta = { ...normalized, _at: Date.now() };
     this.#cacheSet(resolvedKey, withMeta);
-    this.staleWatch.set(resolvedKey, withMeta);
+    this.#stalePut(resolvedKey, withMeta);
     // Also store under the auto key so later auto requests hit instantly.
     if (!provider) {
       const autoKey = `watch:${anilistId}:${episode}:auto:${audio}`;
       this.#cacheSet(autoKey, withMeta);
-      this.staleWatch.set(autoKey, withMeta);
+      this.#stalePut(autoKey, withMeta);
     }
     return normalized;
+  }
+
+  /** Bounded write to the stale map (insertion order = age). */
+  #stalePut(key, value) {
+    this.staleWatch.set(key, value);
+    while (this.staleWatch.size > MAX_STALE_ENTRIES) {
+      const oldest = this.staleWatch.keys().next().value;
+      if (oldest === undefined) break;
+      this.staleWatch.delete(oldest);
+    }
   }
 
   /** Probe provider batches in parallel; return the first working result. */
@@ -299,7 +319,11 @@ export class AnivexaService {
             const raw = await this.fetchJson(c.path);
             const normalized = this.#normalizeWatch(raw, c.provider, c.episode, c.audio);
             if (normalized.streams.length === 0) {
-              throw new ApiError(502, 'STREAM_UNAVAILABLE', `Provider ${c.provider} returned no streams`);
+              // The upstream returned no streams (e.g. its catch-all info JSON
+              // for a path that doesn't exist) — that's a missing episode, not
+              // a provider outage: signal 404 and don't mark the provider as
+              // failed (which would turn the response into a 502).
+              throw new ApiError(404, 'STREAM_UNAVAILABLE', `Provider ${c.provider} returned no streams`);
             }
             this.#recordLatency(c.provider, performance.now() - t0, true);
             logger.debug(`[anivexa] provider ${c.provider} resolved in ${(performance.now() - t0).toFixed(0)}ms`);
@@ -307,7 +331,7 @@ export class AnivexaService {
           } catch (error) {
             this.#recordLatency(c.provider, performance.now() - t0, false);
             logger.debug(`[anivexa] provider ${c.provider} failed in ${(performance.now() - t0).toFixed(0)}ms: ${error.message}`);
-            onError?.(error);
+            if (!(error instanceof ApiError && error.status === 404)) onError?.(error);
             throw error;
           }
         }),

@@ -125,14 +125,20 @@ export class AnimeEnrichUpsertService implements UpsertPort<NormalizedAnimeEnric
       if (!animeRow) return "updated" as const; // not in the catalog yet
       const animeId = animeRow.id;
 
-      // Sync cursor: this anime was just enriched (enrichment-specific so
-      // ENRICH_STALE_DAYS works even though Stage 1 also bumps last_synced_at).
-      await client.query("UPDATE anime SET enrich_synced_at = now(), last_synced_at = now() WHERE id = $1", [animeId]);
-
       // Failed endpoints MUST NOT replace existing data: a transient Jikan
       // error surfaces as an empty list, and delete-then-insert with an
       // empty list would wipe what we already have. Skip those groups.
       const failed = new Set(row.failedEndpoints);
+
+      // Enrichment cursor: only advance when EVERY group succeeded —
+      // bumping enrich_synced_at despite failures would make the stale-only
+      // refresh (ENRICH_STALE_DAYS) treat the anime as fresh and never retry
+      // the failed groups until the whole window elapses.
+      if (failed.size === 0) {
+        await client.query("UPDATE anime SET enrich_synced_at = now() WHERE id = $1", [animeId]);
+      }
+      await client.query("UPDATE anime SET last_synced_at = now() WHERE id = $1", [animeId]);
+
       if (!failed.has("characters")) await this.writeCharactersAndVoiceActors(client, animeId, row);
       if (!failed.has("staff")) await this.writeStaff(client, animeId, row);
       if (!failed.has("relations")) await this.replaceRelations(client, animeId, row);
@@ -173,14 +179,16 @@ export class AnimeEnrichUpsertService implements UpsertPort<NormalizedAnimeEnric
 
     // Prune voice links for characters that are no longer part of this
     // anime. Uses the OLD id list (NOT the freshly-written anime_characters
-    // rows), so this works even when the new list is empty.
+    // rows). `NOT IN (SELECT unnest(...))` is NULL-safe: with an empty new
+    // list the subquery yields no rows, so NOT IN is TRUE for every old
+    // character and all their voice links are pruned (the old
+    // `NOT IN (NULL)` form deleted nothing).
     if (oldIds.length > 0) {
-      const placeholders = newIds.length > 0 ? newIds.map((_, i) => `$${i + 2}`).join(", ") : "NULL";
       await client.query(
         `DELETE FROM character_staff
          WHERE character_id = ANY($1::bigint[])
-           AND character_id NOT IN (${placeholders})`,
-        [oldIds, ...newIds],
+           AND character_id NOT IN (SELECT unnest($2::bigint[]))`,
+        [oldIds, newIds],
       );
     }
     // Prune character joins Jikan no longer lists.

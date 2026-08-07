@@ -335,7 +335,7 @@ export class MalService {
 
     const ls = await this.#api(`/anime/${malAnimeId}/my_list_status`, { method: 'PATCH', token, form, refresh });
     const animeId = await this.repository.findAnimeIdByMalId(malAnimeId);
-    const entry = await this.repository.upsertEntry(userId, {
+    await this.repository.upsertEntry(userId, {
       malAnimeId,
       animeId,
       status: ls.status ?? patch.status ?? 'plan_to_watch',
@@ -345,6 +345,11 @@ export class MalService {
       rewatchCount: Number(ls.rewatch_count ?? patch.rewatchCount ?? 0),
       updatedAt: ls.updated_at ? new Date(ls.updated_at) : new Date(),
     });
+    // upsertEntry only RETURNs id/malAnimeId/animeId; re-select the full row
+    // so add/update responses match the MalListEntry shape the frontend uses
+    // (status, score, episodesWatched, …) instead of a partial object whose
+    // missing `status` breaks the optimistic cache write.
+    const entry = await this.repository.findEntry(userId, malAnimeId);
     return { malAnimeId, entry };
   }
 

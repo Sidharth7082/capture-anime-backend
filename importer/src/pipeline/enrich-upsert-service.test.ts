@@ -177,7 +177,9 @@ test("empty new character list still prunes old voice-actor links (old-id based)
 
   const all = statements.join("\n");
   assert.ok(
-    all.includes("DELETE FROM character_staff WHERE character_id = ANY($1::bigint[]) AND character_id NOT IN (NULL)"),
+    all.includes(
+      "DELETE FROM character_staff WHERE character_id = ANY($1::bigint[]) AND character_id NOT IN (SELECT unnest($2::bigint[]))",
+    ),
     "VA links for removed characters are pruned even when the new list is empty",
   );
   assert.ok(all.includes("DELETE FROM anime_characters WHERE anime_id = $1"), "character joins cleared");

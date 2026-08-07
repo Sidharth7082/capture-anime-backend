@@ -206,6 +206,12 @@ export class Importer {
       cursor = await this.jobs.getLastSyncAt("anilist-anime");
     }
     try {
+      // AniList runs ALWAYS start at page 1: incremental runs sort by
+      // UPDATED_AT_DESC (newest first) while the saved resume page came from
+      // a previous ID-ordered full walk — resuming mid-catalog would skip
+      // every item updated since the last run. The fetcher stops itself at
+      // the first stale item, so starting at 1 is cheap and correct; full
+      // runs re-walk the catalog (idempotent upserts).
       const result = await runPipeline<AniListMedia, NormalizedAnime>(
         {
           source: "anilist-anime",
@@ -224,7 +230,7 @@ export class Importer {
           onProgress: (page, counts) => metrics?.recordPage("anilist-anime", page, counts),
           logger: this.logger,
         },
-        options,
+        { ...options, startPage: 1 },
       );
       metrics?.recordEnd("anilist-anime", result, result.ok ? "completed" : "failed");
       return result;

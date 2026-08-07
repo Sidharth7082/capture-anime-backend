@@ -290,10 +290,16 @@ export function normalizeAnimeEnrichment(bundle: JikanEnrichmentBundle): Normali
   }
 
   const relations: EnrichRelation[] = [];
+  // anime_relations PK is (anime_id, mal_id, media_type) — dedupe so a
+  // duplicate entry from Jikan can't abort the whole anime's transaction.
+  const seenRelations = new Set<string>();
   for (const group of bundle.relations ?? []) {
     const relation = group.relation?.trim() ?? "Other";
     for (const entry of group.entry ?? []) {
       if (entry.mal_id == null || !entry.name) continue;
+      const key = `${entry.mal_id}:${entry.type ?? "unknown"}`;
+      if (seenRelations.has(key)) continue;
+      seenRelations.add(key);
       relations.push({
         malId: entry.mal_id,
         mediaType: entry.type ?? "unknown",
@@ -304,8 +310,13 @@ export function normalizeAnimeEnrichment(bundle: JikanEnrichmentBundle): Normali
   }
 
   const recommendations: EnrichRecommendation[] = [];
+  // anime_recommendations PK is (anime_id, mal_id) — dedupe for the same
+  // reason as relations.
+  const seenRecommendations = new Set<number>();
   for (const entry of bundle.recommendations ?? []) {
     if (entry.entry?.mal_id == null || !entry.entry.title) continue;
+    if (seenRecommendations.has(entry.entry.mal_id)) continue;
+    seenRecommendations.add(entry.entry.mal_id);
     recommendations.push({
       malId: entry.entry.mal_id,
       title: entry.entry.title,

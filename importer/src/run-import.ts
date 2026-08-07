@@ -14,6 +14,7 @@
 import "dotenv/config";
 import { loadEnv, createLogger } from "./index.js";
 import { createJikanClient } from "./jikan.js";
+import { createAniListClient, type AniListClient } from "./anilist.js";
 import { createDatabase } from "./database.js";
 import { createTypesense } from "./typesense.js";
 import { createImporter } from "./importer.js";
@@ -56,6 +57,17 @@ const typesense = createTypesense({
   collection: env.TYPESENSE_COLLECTION,
   logger,
 });
+// The AniList client was never wired into the CLI — `--anilist`/`--full`
+// advertised the mode but importAniList() short-circuited with
+// "anilist-anime: not configured" because no client was ever created.
+const anilistClient: AniListClient | null = env.ANILIST_ENABLED === "true"
+  ? createAniListClient({
+      endpoint: env.ANILIST_ENDPOINT,
+      accessToken: env.ANILIST_ACCESS_TOKEN,
+      minIntervalMs: env.ANILIST_MIN_INTERVAL_MS,
+      logger,
+    })
+  : null;
 const importer = createImporter({
   jikan,
   db: dryRun ? (null as unknown as ReturnType<typeof createDatabase>) : db,
@@ -63,6 +75,8 @@ const importer = createImporter({
   pageDelayMs: env.JIKAN_PAGE_DELAY_MS,
   enrichBatchSize: env.ENRICH_BATCH_SIZE,
   enrichStaleDays: env.ENRICH_STALE_DAYS,
+  anilist: anilistClient,
+  anilistPerPage: env.ANILIST_PER_PAGE,
   logger,
 });
 if (dryRun) {
@@ -82,7 +96,11 @@ process.on("SIGTERM", () => {
 
 // --- run --------------------------------------------------------------------
 try {
-  const result = anilist
+  if (anilist && !anilistClient) {
+    logger.error("[cli] --anilist requested but ANILIST_ENABLED is not 'true' — refusing to run a silent no-op");
+    process.exit(1);
+  }
+  const result = anilistClient
     ? await importer.importAniList({ limit, maxPages, dryRun, reset, full })
     : enrich
       ? await importer.enrichAnime({ limit, maxPages, dryRun, reset })

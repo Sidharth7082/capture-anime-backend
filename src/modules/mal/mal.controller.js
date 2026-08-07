@@ -24,7 +24,22 @@ export function createMalController(malService) {
           true, // expose — safe diagnostic on an authenticated endpoint
         );
       }
-      const { authorizeUrl } = await malService.buildAuthorizeUrl(req.user.sub);
+      const { authorizeUrl, state } = await malService.buildAuthorizeUrl(req.user.sub);
+      // Bind the OAuth state to THIS browser: the callback (a top-level
+      // navigation from MAL) must present the same signed cookie, otherwise
+      // anyone who obtains an authorizeUrl (e.g. tricking a victim into
+      // completing a flow started under the attacker's account) could link
+      // the victim's MAL tokens to the attacker's backend user — an
+      // account-linking CSRF. Note: same-site on LAN deployments; behind a
+      // cross-site frontend the browser must accept third-party cookies.
+      res.cookie('mal_state', state, {
+        httpOnly: true,
+        signed: true,
+        sameSite: 'lax',
+        secure: env.NODE_ENV === 'production' && env.COOKIE_SECURE !== 'false',
+        path: '/api/mal',
+        maxAge: 10 * 60 * 1000,
+      });
       res.json({ authorizeUrl });
     }),
 
@@ -34,8 +49,14 @@ export function createMalController(malService) {
       if (error || !code || !state) {
         return res.redirect(`${env.FRONTEND_URL}/profile#mal=${error ? 'denied' : 'error'}`);
       }
+      // The state in the URL must match the signed cookie set by /connect.
+      // Reject when missing or mismatched — see the CSRF note in connect().
+      if (!req.signedCookies.mal_state || req.signedCookies.mal_state !== state) {
+        return res.redirect(`${env.FRONTEND_URL}/profile#mal=error`);
+      }
       try {
         await malService.handleCallback({ code, state });
+        res.clearCookie('mal_state', { path: '/api/mal' });
         res.redirect(`${env.FRONTEND_URL}/profile#mal=connected`);
       } catch (err) {
         // Surface the reason via a hash flag so the UI can show a toast.

@@ -24,7 +24,16 @@ export const registerSchema = z.object({
 // Login accepts either an email or a username in `identifier`.
 export const loginSchema = z.object({
   identifier: z.string().min(1).max(254),
-  password: z.string().min(1).max(72),
+  // bcrypt truncates at 72 BYTES (same rule as register): a login password
+  // capped only at 72 characters would verify successfully for any value
+  // sharing the first 72 bytes with the real password.
+  password: z
+    .string()
+    .min(1)
+    .max(72)
+    .refine((value) => Buffer.byteLength(value, 'utf8') <= 72, {
+      message: 'Password must be at most 72 bytes (bcrypt limit)',
+    }),
 });
 
 // Refresh token may arrive in the request body or the httpOnly cookie.

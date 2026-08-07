@@ -67,9 +67,13 @@ export function createUserService({ repository }) {
      */
     async saveContinueWatching(userId, animeId, body) {
       const { episodeNumber, playbackPositionSeconds, durationSeconds } = body;
+      // Only treat the position as "finished" for episodes that actually have
+      // a meaningful duration — with durationSeconds <= 5 the last-5s window
+      // covers the whole episode and every save would delete the resume point.
       const nearEnd =
         durationSeconds != null &&
-        playbackPositionSeconds >= Math.max(0, durationSeconds - 5);
+        durationSeconds >= 5 &&
+        playbackPositionSeconds >= durationSeconds - 5;
       if (nearEnd) {
         await repository.deleteContinueWatching(userId, animeId);
         return { animeId, completed: true, removed: true };

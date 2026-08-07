@@ -84,19 +84,21 @@ export class JikanClient {
         lastError = err;
         if (axios.isAxiosError<{ message?: string }>(err)) {
           const status = err.response?.status;
-          // 4xx errors are deterministic — no point retrying.
+          // 429 must be checked BEFORE the generic 4xx branch, otherwise the
+          // rate-limit backoff below is dead code and every 429 throws.
+          if (status === 429) {
+            this.logger.warn(`[jikan] rate limited on ${path}, backing off (attempt ${attempt + 1})`);
+            const retryAfter = parseRetryAfter(err.response?.headers?.["retry-after"]);
+            await delay(retryAfter ?? backoffMs(attempt));
+            continue;
+          }
+          // Other 4xx errors are deterministic — no point retrying.
           if (status != null && status >= 400 && status < 500) {
             throw new JikanError(
               err.response?.data?.message ?? `Jikan ${path} failed (${status})`,
               status,
               path,
             );
-          }
-          if (status === 429) {
-            this.logger.warn(`[jikan] rate limited on ${path}, backing off (attempt ${attempt + 1})`);
-            const retryAfter = parseRetryAfter(err.response?.headers?.["retry-after"]);
-            await delay(retryAfter ?? backoffMs(attempt));
-            continue;
           }
         }
         if (attempt < this.retries) {

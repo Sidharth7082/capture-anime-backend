@@ -16,8 +16,16 @@ const envSchema = z.object({
   // Secrets must be strong: at least 32 chars (256-bit) for HS256.
   JWT_ACCESS_SECRET: z.string().min(32, 'JWT_ACCESS_SECRET must be >= 32 characters'),
   JWT_REFRESH_SECRET: z.string().min(32, 'JWT_REFRESH_SECRET must be >= 32 characters'),
-  JWT_ACCESS_EXPIRES_IN: z.string().min(1).default('15m'),
-  JWT_REFRESH_EXPIRES_IN: z.string().min(1).default('30d'),
+  // jwt-style durations ('15m', '30d', '1h'); validated here so a typo fails
+  // at startup instead of throwing on the first login/register.
+  JWT_ACCESS_EXPIRES_IN: z
+    .string()
+    .regex(/^\d+\s*[smhdw]?$/i, 'JWT_ACCESS_EXPIRES_IN must be a duration like "15m" or "1h"')
+    .default('15m'),
+  JWT_REFRESH_EXPIRES_IN: z
+    .string()
+    .regex(/^\d+\s*[smhdw]?$/i, 'JWT_REFRESH_EXPIRES_IN must be a duration like "30d" or "1h"')
+    .default('30d'),
 
   CORS_ORIGIN: z.string().default('*'), // comma-separated list, or * for all
   TRUST_PROXY: z.string().default('false'), // 'false' | 'true' | number of hops
