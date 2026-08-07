@@ -53,8 +53,11 @@ export function createHealthServer(deps: HealthDeps): HealthServer {
     deps.db
       .query<JobRow>("SELECT source, status, last_page, total_items, started_at, finished_at, error FROM import_jobs ORDER BY source")
       .then((result) => {
+        // A failed last run (failed items, sink failure, cancellation) is a
+        // degraded state — report it so monitors don't see a false "ok".
+        const degraded = result.rows.some((r) => r.status === "failed");
         const body = JSON.stringify({
-          status: "ok",
+          status: degraded ? "degraded" : "ok",
           uptimeSeconds: metrics.uptimeSeconds,
           import: {
             current: metrics.current,
@@ -71,20 +74,19 @@ export function createHealthServer(deps: HealthDeps): HealthServer {
             error: r.error,
           })),
         });
-        res.writeHead(200, { "content-type": "application/json" });
+        res.writeHead(degraded ? 503 : 200, { "content-type": "application/json" });
         res.end(body);
       })
       .catch((err) => {
-        // The import_jobs table may not exist yet on a fresh database —
-        // still report health, with an empty job list.
-        logger.warn(`[health] import_jobs read failed: ${String(err)}`);
+        // A DB failure is a real health signal, not an excuse to report ok.
+        logger.error(`[health] import_jobs read failed: ${String(err)}`);
         const body = JSON.stringify({
-          status: "ok",
+          status: "degraded",
           uptimeSeconds: metrics.uptimeSeconds,
           import: { current: metrics.current, lastRun: metrics.lastRun, nextRunAt: metrics.nextRunAt },
           jobs: [],
         });
-        res.writeHead(200, { "content-type": "application/json" });
+        res.writeHead(503, { "content-type": "application/json" });
         res.end(body);
       });
   });

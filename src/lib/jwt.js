@@ -5,9 +5,18 @@ import { env, parseDuration } from '../config/env.js';
 import { ApiError } from './errors.js';
 
 const ALGORITHM = 'HS256';
+// Issuer/audience pin the token to this service, so a token signed by another
+// app sharing a secret (or a stale role claim) can't be replayed here.
+const ISSUER = 'capture-anime-backend';
+const AUDIENCE = 'capture-anime-api';
 
 function sign(payload, secret, expiresIn) {
-  return jwt.sign(payload, secret, { algorithm: ALGORITHM, expiresIn });
+  return jwt.sign(payload, secret, {
+    algorithm: ALGORITHM,
+    expiresIn,
+    issuer: ISSUER,
+    audience: AUDIENCE,
+  });
 }
 
 export function signAccessToken(user) {
@@ -29,7 +38,11 @@ export function signRefreshToken(user) {
 
 function verify(token, secret, expectedType) {
   try {
-    const payload = jwt.verify(token, secret, { algorithms: [ALGORITHM] });
+    const payload = jwt.verify(token, secret, {
+      algorithms: [ALGORITHM],
+      issuer: ISSUER,
+      audience: AUDIENCE,
+    });
     if (payload.type !== expectedType) throw new Error('wrong token type');
     return payload;
   } catch {

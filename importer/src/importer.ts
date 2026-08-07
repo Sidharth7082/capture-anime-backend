@@ -254,9 +254,27 @@ export class Importer {
    */
   async run(): Promise<RunResult[]> {
     const results: RunResult[] = [];
-    if (this.deps.anilist) results.push(await this.importAniList());
-    results.push(await this.importAnime());
-    results.push(await this.enrichAnime());
+    // Isolate stages: a failure in one (e.g. a transient DB error in the
+    // optional AniList stage) must not starve the mandatory Jikan import and
+    // enrichment of the whole cycle.
+    const runStage = async (label: string, stage: () => Promise<RunResult>): Promise<void> => {
+      try {
+        results.push(await stage());
+      } catch (err) {
+        this.logger.error(`[importer] ${label} stage failed: ${String(err)}`);
+        results.push({
+          ok: false,
+          fetched: 0,
+          inserted: 0,
+          updated: 0,
+          failed: 1,
+          summary: `${label}: ${String(err)}`,
+        });
+      }
+    };
+    if (this.deps.anilist) await runStage("anilist", () => this.importAniList());
+    await runStage("jikan", () => this.importAnime());
+    await runStage("enrich", () => this.enrichAnime());
     return results;
   }
 }

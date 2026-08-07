@@ -9,12 +9,11 @@ import {
   accessTokenLifetimeMs,
   refreshTokenLifetimeMs,
 } from '../../lib/jwt.js';
-import { hashPassword, verifyPassword } from '../../lib/password.js';
+import { hashPassword, verifyPassword, dummyHash } from '../../lib/password.js';
 import { ApiError } from '../../lib/errors.js';
 
-// Bcrypt hash of a throwaway random string. Compared against whenever the
-// account is unknown so login timing doesn't reveal which usernames exist.
-const DUMMY_HASH = '$2b$10$TRWzCXGCDYGv4dGAe5S6fe1hoAmvIzXC6kyVgT1INzRSUPzzScmQe';
+// (Bcrypt hash cost for the timing equalizer now comes from password.js, so
+// it can never drift from the real BCRYPT_ROUNDS — see dummyHash().)
 
 function publicUser(user) {
   return {
@@ -53,9 +52,24 @@ export function createAuthService({ repository, now = () => new Date() } = {}) {
   return {
     async register({ username, email, password }) {
       const passwordHash = await hashPassword(password);
-      const user = await repository.createUser({ username, email, passwordHash });
-      const tokens = issueTokens(user);
-      await persistRefreshToken(user.id, tokens.refreshToken);
+      // Atomic: the user row and its FIRST refresh token are created in one
+      // transaction — a failure can't leave an account without a session.
+      const { user, refreshToken } = await repository.createUserWithRefreshToken({
+        username,
+        email,
+        passwordHash,
+        makeRefreshToken: (userId) => {
+          const token = signRefreshToken({ id: userId });
+          return {
+            refreshToken: token,
+            tokenHash: hashToken(token),
+            expiresAt: new Date(now().getTime() + refreshTokenLifetimeMs()),
+          };
+        },
+      });
+      // issueTokens() signs a fresh refresh token; override it with the one
+      // actually persisted so the client's token survives a refresh.
+      const tokens = { ...issueTokens(user), refreshToken };
       return { user: publicUser(user), tokens };
     },
 
@@ -63,7 +77,7 @@ export function createAuthService({ repository, now = () => new Date() } = {}) {
       const user = await repository.findByEmailOrUsername(identifier);
       // Always run bcrypt — against the dummy hash when the account is
       // unknown — so response timing does not reveal valid usernames.
-      const passwordOk = await verifyPassword(password, user?.password_hash ?? DUMMY_HASH);
+      const passwordOk = await verifyPassword(password, user?.password_hash ?? (await dummyHash()));
       if (!user || !passwordOk) {
         throw ApiError.unauthorized('Invalid credentials');
       }
@@ -120,10 +134,13 @@ export function createAuthService({ repository, now = () => new Date() } = {}) {
       return { user: publicUser(user), tokens };
     },
 
-    async logout(refreshToken) {
+    async logout(refreshTokens) {
       // Idempotent: revoking an unknown/already-revoked token is a no-op.
-      if (refreshToken) {
-        await repository.revokeRefreshTokenByHash(hashToken(refreshToken));
+      const list = Array.isArray(refreshTokens) ? refreshTokens : [refreshTokens];
+      for (const refreshToken of list) {
+        if (refreshToken) {
+          await repository.revokeRefreshTokenByHash(hashToken(refreshToken));
+        }
       }
       return { success: true };
     },

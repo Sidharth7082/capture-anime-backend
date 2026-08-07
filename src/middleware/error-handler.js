@@ -3,6 +3,7 @@
 import { ZodError } from 'zod';
 import { ApiError } from '../lib/errors.js';
 import { logger } from '../lib/logger.js';
+import { redactSensitiveQuery } from '../lib/redact.js';
 
 // PostgreSQL error codes -> HTTP status
 const PG_STATUS = {
@@ -44,7 +45,7 @@ export function errorHandler(err, req, res, _next) {
   }
 
   if (status >= 500) {
-    logger.error(`[${req.method} ${req.originalUrl}] ${err.stack || err.message}`);
+    logger.error(`[${req.method} ${redactSensitiveQuery(req.originalUrl)}] ${err.stack || err.message}`);
     // Sanitize 5xx messages unless the error explicitly opted in to exposing
     // a safe diagnostic (e.g. missing env var names on an authed endpoint).
     if (!err.expose) {
@@ -53,7 +54,7 @@ export function errorHandler(err, req, res, _next) {
       details = undefined;
     }
   } else {
-    logger.warn(`[${req.method} ${req.originalUrl}] ${status} ${code}: ${message}`);
+    logger.warn(`[${req.method} ${redactSensitiveQuery(req.originalUrl)}] ${status} ${code}: ${message}`);
   }
 
   const body = { error: { code, message } };

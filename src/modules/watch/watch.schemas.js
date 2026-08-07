@@ -19,5 +19,5 @@ export const prefetchParams = z.object({
 
 export const prefetchQuery = z.object({
   // Number of episodes to warm (defaults to ANIVEXA_PREFETCH_EPISODES).
-  count: z.coerce.number().int().min(0).max(50).optional(),
+  count: z.coerce.number().int().min(0).max(10).optional(),
 });

@@ -2,10 +2,16 @@ import '../helpers/env.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import request from 'supertest';
+import cookieSignature from 'cookie-signature';
 import { createApp } from '../../src/app.js';
 import { TtlCache } from '../../src/lib/cache.js';
 import { ApiError } from '../../src/lib/errors.js';
 import { signAccessToken } from '../../src/lib/jwt.js';
+import { env } from '../../src/config/env.js';
+
+// Signed cookie value exactly as cookieParser(COOKIE_SECRET) expects it.
+const signedCookie = (value) =>
+  `s:${cookieSignature.sign(value, env.COOKIE_SECRET ?? env.JWT_ACCESS_SECRET)}`;
 
 const META = { page: 1, limit: 20, total: 1, totalPages: 1, hasNextPage: false };
 const ANIME_ITEM = { id: 1, anilistId: 16498, titleRomaji: 'Shingeki no Kyojin', genres: [] };
@@ -332,9 +338,24 @@ test('mal callback without code/state redirects with an error hash', async () =>
 
 test('mal callback with code+state redirects to the frontend connected', async () => {
   const app = buildApp();
-  const res = await request(app).get('/api/mal/callback?code=x&state=s');
+  // The callback is only trusted when the URL state matches the signed
+  // mal_state cookie set by /connect (account-linking CSRF protection).
+  const state = 's';
+  const cookie = `mal_state=${signedCookie(state)}`;
+  const res = await request(app)
+    .get(`/api/mal/callback?code=x&state=${state}`)
+    .set('Cookie', [cookie]);
   assert.equal(res.status, 302);
   assert.match(res.headers.location, /#mal=connected$/);
+});
+
+test('mal callback rejects a state that does not match the signed cookie', async () => {
+  const app = buildApp();
+  const res = await request(app)
+    .get('/api/mal/callback?code=x&state=attacker-state')
+    .set('Cookie', [`mal_state=${signedCookie('real-state')}`]);
+  assert.equal(res.status, 302);
+  assert.match(res.headers.location, /#mal=error$/);
 });
 
 test('mal endpoints require auth and validate input', async () => {

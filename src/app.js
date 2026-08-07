@@ -128,7 +128,23 @@ export function createApp({ authService, animeService, userService, watchService
 
   // Auth responses carry tokens — serving them compressed would set up the
   // BREACH attack precondition, so /api/auth bypasses compression.
-  app.use('/api/auth', createAuthRouter({ authService, authLimiter: effectiveAuthLimiter }));
+  const refreshLimiter =
+    rateLimit({
+      windowMs: env.RATE_LIMIT_WINDOW_MS,
+      limit: env.REFRESH_RATE_LIMIT_MAX,
+      standardHeaders: 'draft-7',
+      legacyHeaders: false,
+      handler: (_req, res) =>
+        res.status(429).json({ error: { code: 'RATE_LIMITED', message: 'Too many refresh attempts' } }),
+    });
+  app.use(
+    '/api/auth',
+    createAuthRouter({
+      authService,
+      authLimiter: effectiveAuthLimiter,
+      refreshLimiter,
+    }),
+  );
 
   app.use(compression());
   app.use('/api/anime', createAnimeRouter({ animeService, cache, cacheTtlMs }));

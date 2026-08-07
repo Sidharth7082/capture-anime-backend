@@ -35,7 +35,7 @@ export class AniListClient {
   private readonly minIntervalMs: number;
   private readonly maxRetries: number;
   private readonly logger: Pick<Console, "warn" | "error" | "info">;
-  private lastRequestAt = 0;
+  private lastFinishedAt = 0;
 
   constructor(config: AniListConfig = {}) {
     this.minIntervalMs = config.minIntervalMs ?? 450;
@@ -57,10 +57,12 @@ export class AniListClient {
    * retries are exhausted (GraphQL-level errors are surfaced as-is).
    */
   async query<T>(query: string, variables: Record<string, unknown> = {}): Promise<T> {
-    // Space requests: AniList rate-limits per second AND per minute.
-    const wait = this.lastRequestAt + this.minIntervalMs - Date.now();
+    // Space requests from the PREVIOUS request's COMPLETION: measuring from
+    // the request start lets a slow response (timeout up to 60s) be followed
+    // by an immediate burst, blowing past AniList's per-second/per-minute
+    // quotas.
+    const wait = this.lastFinishedAt + this.minIntervalMs - Date.now();
     if (wait > 0) await delay(wait);
-    this.lastRequestAt = Date.now();
 
     let lastError: unknown;
     for (let attempt = 0; attempt <= this.maxRetries; attempt += 1) {
@@ -69,6 +71,7 @@ export class AniListClient {
           query,
           variables,
         });
+        this.lastFinishedAt = Date.now();
         const body = res.data;
         if (body.errors && body.errors.length > 0) {
           const msg = body.errors.map((e) => e.message).join("; ");

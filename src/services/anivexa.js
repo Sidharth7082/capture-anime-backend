@@ -196,7 +196,7 @@ export class AnivexaService {
         if (fresh) {
           this.#cacheHitLog(key, 'watch');
           logger.info(`[anivexa] watch cache hit in ${(performance.now() - tCache).toFixed(0)}ms (${p})`);
-          return fresh;
+          return this.#publicShape(fresh);
         }
         const stale = this.staleWatch.get(key);
         if (stale && Date.now() - stale._at < SWR_GRACE_MS && !this.refreshing.has(key)) {
@@ -205,20 +205,20 @@ export class AnivexaService {
             .catch((err) => logger.warn(`[anivexa] background refresh failed ${key}: ${err.message}`))
             .finally(() => this.refreshing.delete(key));
           logger.info(`[anivexa] watch stale-while-revalidate (${p}) in ${(performance.now() - tCache).toFixed(0)}ms`);
-          return stale;
+          return this.#publicShape(stale);
         }
       }
     } else {
       const key = this.#watchKey(anilistId, episode, provider, audio);
       const fresh = this.#cacheGet(key);
-      if (fresh) { this.#cacheHitLog(key, 'watch'); return fresh; }
+      if (fresh) { this.#cacheHitLog(key, 'watch'); return this.#publicShape(fresh); }
       const stale = this.staleWatch.get(key);
       if (stale && Date.now() - stale._at < SWR_GRACE_MS && !this.refreshing.has(key)) {
         this.refreshing.add(key);
         this.#resolveAndCache(key, anilistId, episode, { provider, audio })
           .catch(() => {})
           .finally(() => this.refreshing.delete(key));
-        return stale;
+        return this.#publicShape(stale);
       }
     }
 
@@ -230,7 +230,7 @@ export class AnivexaService {
       { provider, audio },
     );
     logger.info(`[anivexa] watch total ${(performance.now() - tTotal).toFixed(0)}ms (${resolved.provider})`);
-    return resolved;
+    return this.#publicShape(resolved);
   }
 
   /** Probe providers (parallel batches) and cache the first working result. */
@@ -306,6 +306,15 @@ export class AnivexaService {
       if (oldest === undefined) break;
       this.staleWatch.delete(oldest);
     }
+  }
+
+  /** Strip internal bookkeeping (e.g. `_at`) before a value reaches clients. */
+  #publicShape(value) {
+    if (value && typeof value === 'object' && !Array.isArray(value) && '_at' in value) {
+      const { _at, ...rest } = value;
+      return rest;
+    }
+    return value;
   }
 
   /** Probe provider batches in parallel; return the first working result. */

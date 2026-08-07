@@ -49,6 +49,48 @@ export function createAuthRepository(pool) {
       }
     },
 
+    /**
+     * Register atomically: create the user AND its first refresh token in one
+     * transaction, so a failure can never leave an account without a usable
+     * session (which previously produced a sanitized 500 and a user who could
+     * only log in, never retry).
+     * @param {object} input
+     * @param {string} input.username
+     * @param {string} input.email
+     * @param {string} input.passwordHash
+     * @param {(userId: number) => { refreshToken: string, tokenHash: string, expiresAt: Date }} input.makeRefreshToken
+     */
+    async createUserWithRefreshToken({ username, email, passwordHash, makeRefreshToken }) {
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        let user;
+        try {
+          const { rows } = await client.query(
+            `INSERT INTO users (username, email, password_hash)
+             VALUES ($1, $2, $3)
+             RETURNING id, username, email, display_name, avatar_url, role, status, created_at`,
+            [username, email, passwordHash],
+          );
+          user = rows[0];
+        } catch (err) {
+          mapCreateUserError(err);
+        }
+        const { refreshToken, tokenHash, expiresAt } = makeRefreshToken(user.id);
+        await client.query(
+          `INSERT INTO refresh_tokens (user_id, token_hash, expires_at) VALUES ($1, $2, $3)`,
+          [user.id, tokenHash, expiresAt],
+        );
+        await client.query('COMMIT');
+        return { user, refreshToken };
+      } catch (err) {
+        await client.query('ROLLBACK').catch(() => {});
+        throw err;
+      } finally {
+        client.release();
+      }
+    },
+
     async touchLastLogin(userId) {
       await pool.query(`UPDATE users SET last_login_at = now() WHERE id = $1`, [userId]);
     },

@@ -24,14 +24,16 @@ export class AniListClient {
     this.minIntervalMs = minIntervalMs;
     this.maxRetries = maxRetries;
     this.timeoutMs = timeoutMs;
-    this._lastRequestAt = 0;
+    this._lastFinishedAt = 0;
     this.requestCount = 0;
   }
 
   async _throttle() {
-    const wait = this._lastRequestAt + this.minIntervalMs - Date.now();
+    // Space from the previous request's COMPLETION (not its start): a slow
+    // response would otherwise let the next request fire immediately,
+    // bursting past AniList's per-second/per-minute quotas.
+    const wait = this._lastFinishedAt + this.minIntervalMs - Date.now();
     if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
-    this._lastRequestAt = Date.now();
   }
 
   /**
@@ -58,6 +60,7 @@ export class AniListClient {
           body: JSON.stringify({ query, variables }),
           signal: AbortSignal.timeout(this.timeoutMs),
         });
+        this._lastFinishedAt = Date.now();
       } catch (err) {
         if (attempt < this.maxRetries) {
           await this._backoff(attempt, `network error: ${err.message}`);

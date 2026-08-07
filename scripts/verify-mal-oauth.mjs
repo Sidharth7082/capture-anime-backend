@@ -118,8 +118,12 @@ check('authorize has PKCE S256 challenge', challenge?.length > 40);
 check('authorize declares S256 method', authorizeUrl.searchParams.get('code_challenge_method') === 'S256');
 check('authorize has state', Boolean(state));
 
-// 2. callback (simulate MAL redirect)
-const cb = await request(app).get(`/api/mal/callback?code=mock-code&state=${state}`);
+// 2. callback (simulate MAL redirect). The browser presents the signed
+// mal_state cookie set by /connect (account-linking CSRF protection), so the
+// supertest agent must carry it forward — supertest's agent() keeps cookies.
+const cb = await request(app)
+  .get(`/api/mal/callback?code=mock-code&state=${state}`)
+  .set('Cookie', connect.headers['set-cookie']);
 check('callback redirects to frontend #mal=connected', cb.status === 302 && cb.headers.location.endsWith('#mal=connected'));
 check('tokens stored ENCRYPTED', fakeRepo.account?.accessTokenEnc && !fakeRepo.account.accessTokenEnc.includes('mal-at'));
 

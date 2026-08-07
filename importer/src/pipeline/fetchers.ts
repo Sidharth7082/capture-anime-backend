@@ -61,6 +61,31 @@ export const ENRICH_ENDPOINTS = [
 export type EnrichEndpoint = (typeof ENRICH_ENDPOINTS)[number];
 
 /**
+ * Run `fn` over `items` with at most `limit` promises in flight (a tiny
+ * worker-pool semaphore; preserves input order).
+ */
+async function mapLimit<T, R>(
+  items: T[],
+  fn: (item: T) => Promise<R>,
+  limit: number,
+): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let next = 0;
+  const worker = async () => {
+    for (;;) {
+      const index = next;
+      next += 1;
+      if (index >= items.length) return;
+      const item = items[index];
+      if (item === undefined) return;
+      results[index] = await fn(item);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, () => worker()));
+  return results;
+}
+
+/**
  * Fetches the six detail endpoints for a batch of anime (one item per anime).
  * Per-endpoint failures are isolated: a bundle carries `failed_endpoints` so
  * a partially-failed anime still enriches the endpoints that succeeded, while
@@ -105,7 +130,11 @@ export function createJikanEnrichFetcher(options: JikanEnrichFetcherOptions): Fe
       const all = await listAnime();
       const start = (page - 1) * batchSize;
       const slice = all.slice(start, start + batchSize);
-      const items = await Promise.all(slice.map((ref) => fetchEndpoints(ref.idMal)));
+      // Cap page-wide concurrency: batchSize anime × 6 endpoints each would
+      // otherwise burst 60 requests at Jikan per page. 12 keeps two anime's
+      // full endpoint sets in flight at a time (each anime's six fetches stay
+      // atomic within fetchEndpoints).
+      const items = await mapLimit(slice, (ref) => fetchEndpoints(ref.idMal), 12);
       return { items, hasNextPage: start + batchSize < all.length };
     },
   };

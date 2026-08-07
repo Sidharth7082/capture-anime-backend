@@ -3,29 +3,30 @@
 // authenticate without storing it in JS.
 import { asyncHandler } from '../../lib/async-handler.js';
 import { refreshTokenLifetimeMs } from '../../lib/jwt.js';
-import { env } from '../../config/env.js';
+import { cookieIsSecure } from '../../lib/cookies.js';
 
 function refreshTokenFrom(req) {
   return req.body.refreshToken ?? req.cookies?.refresh_token ?? null;
 }
 
-function cookieIsSecure() {
-  // Explicit COOKIE_SECURE override wins; otherwise follow NODE_ENV. This
-  // prevents misconfigured deployments from sending the refresh cookie over
-  // plaintext HTTP in production.
-  return env.COOKIE_SECURE !== undefined
-    ? env.COOKIE_SECURE === 'true'
-    : env.NODE_ENV === 'production';
-}
-
-function setRefreshCookie(res, token, maxAgeMs) {
-  res.cookie('refresh_token', token, {
+function refreshCookieOptions(maxAgeMs) {
+  return {
     httpOnly: true,
     secure: cookieIsSecure(),
     sameSite: 'lax',
     path: '/api/auth',
-    maxAge: maxAgeMs,
-  });
+    ...(maxAgeMs !== undefined ? { maxAge: maxAgeMs } : {}),
+  };
+}
+
+function setRefreshCookie(res, token, maxAgeMs) {
+  res.cookie('refresh_token', token, refreshCookieOptions(maxAgeMs));
+}
+
+function clearRefreshCookie(res) {
+  // Mirror the set options (path/secure/sameSite) or browsers ignore the
+  // deletion cookie and the token stays on the device.
+  res.clearCookie('refresh_token', refreshCookieOptions());
 }
 
 export function createAuthController(authService, { now = () => new Date() } = {}) {
@@ -49,8 +50,11 @@ export function createAuthController(authService, { now = () => new Date() } = {
     }),
 
     logout: asyncHandler(async (req, res) => {
-      await authService.logout(refreshTokenFrom(req));
-      res.clearCookie('refresh_token', { path: '/api/auth' });
+      // Revoke BOTH presented tokens: a client may send a body token while a
+      // (possibly older, still-valid) cookie token is also present — leaving
+      // one live would keep a server-side session valid after logout.
+      await authService.logout([req.body.refreshToken, req.cookies?.refresh_token]);
+      clearRefreshCookie(res);
       res.json({ success: true });
     }),
   };

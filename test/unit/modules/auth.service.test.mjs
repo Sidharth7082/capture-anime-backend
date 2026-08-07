@@ -16,7 +16,7 @@ function makeFakeRepository() {
   const repo = {
     users,
     tokens,
-    calls: { createUser: 0, rotate: 0, revokeByHash: 0, revokeAll: 0, lastLogin: 0 },
+    calls: { createUserWithRefreshToken: 0, rotate: 0, revokeByHash: 0, revokeAll: 0, lastLogin: 0 },
 
     async findByEmailOrUsername(identifier) {
       return users.find((u) => u.email === identifier || u.username === identifier) ?? null;
@@ -24,8 +24,8 @@ function makeFakeRepository() {
     async findById(id) {
       return users.find((u) => u.id === id) ?? null;
     },
-    async createUser({ username, email, passwordHash }) {
-      repo.calls.createUser += 1;
+    async createUserWithRefreshToken({ username, email, passwordHash, makeRefreshToken }) {
+      repo.calls.createUserWithRefreshToken += 1;
       const user = {
         id: `u${nextUserId++}`,
         username,
@@ -38,7 +38,9 @@ function makeFakeRepository() {
         created_at: new Date().toISOString(),
       };
       users.push(user);
-      return user;
+      const { refreshToken, tokenHash, expiresAt } = makeRefreshToken(user.id);
+      tokens.set(tokenHash, { id: nextTokenId++, user_id: user.id, token_hash: tokenHash, expires_at: expiresAt, revoked_at: null });
+      return { user, refreshToken };
     },
     async touchLastLogin() {
       repo.calls.lastLogin += 1;
@@ -100,7 +102,7 @@ test('register hashes the password and returns user + tokens', async () => {
 
   const storedUser = repo.users[0];
   assert.notEqual(storedUser.password_hash, 'supersecret1'); // hashed
-  assert.equal(repo.calls.createUser, 1);
+  assert.equal(repo.calls.createUserWithRefreshToken, 1);
 
   // refresh token persisted as a hash, not raw
   const rawHash = hashToken(tokens.refreshToken);

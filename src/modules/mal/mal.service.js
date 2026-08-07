@@ -170,9 +170,21 @@ export class MalService {
     });
     const body = await res.json().catch(() => ({}));
     if (!res.ok) {
-      throw ApiError.serviceUnavailable(
-        `MyAnimeList token request failed (${res.status}): ${body.error ?? 'unknown error'}`,
+      // Keep the HTTP status (malStatus) so callers can distinguish MAL's
+      // own auth rejection (400/401) from a MAL outage (5xx) — the former
+      // means the session is dead, the latter must NOT force a re-link.
+      const detail =
+        typeof body.error === 'string'
+          ? body.error
+          : body.error?.message ?? body.error_description ?? `HTTP ${res.status}`;
+      const err = new ApiError(
+        503,
+        'MAL_UNAVAILABLE',
+        `MyAnimeList token request failed (${res.status})`,
+        detail,
       );
+      err.malStatus = res.status;
+      throw err;
     }
     return {
       accessToken: body.access_token,
@@ -197,9 +209,13 @@ export class MalService {
     try {
       tokens = await this.#tokenRequest(form);
     } catch (err) {
-      throw ApiError.unauthorized(
-        `MyAnimeList session expired — reconnect your account. (${err.message})`,
-      );
+      // Only MAL's own auth rejection (400 invalid_grant / 401) means the
+      // session is dead — a MAL 5xx or network timeout must NOT make users
+      // tear down and re-link.
+      if (err.malStatus === 400 || err.malStatus === 401) {
+        throw ApiError.unauthorized('MyAnimeList session expired — reconnect your account.');
+      }
+      throw err;
     }
     const expiresAt = new Date(Date.now() + (tokens.expiresIn ?? 0) * 1000);
     await this.repository.upsertAccount({
@@ -214,10 +230,21 @@ export class MalService {
     return tokens.accessToken;
   }
 
+  // In-flight refresh per user, so two requests near expiry can't each
+  // refresh (MAL rotates refresh tokens — the second one would fail and log
+  // the user out). Shared by #refreshFor and ensureAccessToken.
+  #refreshInflight = new Map();
+
   async #refreshFor(userId) {
-    const account = await this.repository.findAccountByUser(userId);
-    if (!account) return null;
-    return this.#refreshAccountTokens(account);
+    const inflight = this.#refreshInflight.get(userId);
+    if (inflight) return inflight;
+    const promise = (async () => {
+      const account = await this.repository.findAccountByUser(userId);
+      if (!account) return null;
+      return this.#refreshAccountTokens(account);
+    })().finally(() => this.#refreshInflight.delete(userId));
+    this.#refreshInflight.set(userId, promise);
+    return promise;
   }
 
   /** Plaintext access token for the user, refreshing first if needed. */
@@ -227,13 +254,17 @@ export class MalService {
     if (!account) throw ApiError.unauthorized('No MyAnimeList account linked.');
     const expiresAt = new Date(account.tokenExpiresAt).getTime();
     if (Date.now() > expiresAt - 60_000) {
-      return this.#refreshAccountTokens(account);
+      // Single-flighted with #refreshFor so concurrent requests share one
+      // refresh instead of racing each other.
+      const refreshed = await this.#refreshFor(userId);
+      if (!refreshed) throw ApiError.unauthorized('No MyAnimeList account linked.');
+      return refreshed;
     }
     return decryptSecret(account.accessTokenEnc);
   }
 
   /** Authenticated MAL API call; retries once after a forced refresh on 401. */
-  async #api(path, { method = 'GET', token, form = null, refresh = null, retry = true } = {}) {
+  async #api(path, { method = 'GET', token, form = null, refresh = null, retry = true, okStatuses = null } = {}) {
     const headers = { Authorization: `Bearer ${token}` };
     if (form) headers['Content-Type'] = 'application/x-www-form-urlencoded';
     const res = await this.fetchImpl(`${API_BASE}${path}`, {
@@ -244,12 +275,21 @@ export class MalService {
     });
     if (res.status === 401 && retry && refresh) {
       const fresh = await refresh();
-      if (fresh) return this.#api(path, { method, token: fresh, form, retry: false });
+      if (fresh) {
+        return this.#api(path, { method, token: fresh, form, refresh, retry: false, okStatuses });
+      }
     }
     const body = await res.json().catch(() => ({}));
-    if (!res.ok) {
+    if (!res.ok && !(okStatuses && okStatuses.includes(res.status))) {
+      // A 401 after a fresh token (or without a refresh closure) means the
+      // MAL session is dead — surface it as such instead of a proxy error.
+      if (res.status === 401) {
+        throw ApiError.unauthorized('MyAnimeList session expired — reconnect your account.');
+      }
+      const detail =
+        typeof body.error === 'string' ? body.error : body.error?.message ?? 'unknown error';
       throw ApiError.badGateway(
-        `MyAnimeList API ${method} ${path} failed (${res.status}): ${body.error ?? 'unknown error'}`,
+        `MyAnimeList API ${method} ${path} failed (${res.status}): ${detail}`,
       );
     }
     return body;
@@ -366,14 +406,16 @@ export class MalService {
 
   async removeEntry(userId, malAnimeId) {
     const token = await this.ensureAccessToken(userId);
-    const res = await this.fetchImpl(`${API_BASE}/anime/${malAnimeId}/my_list_status`, {
+    const refresh = () => this.#refreshFor(userId);
+    // Route through #api so a 401 triggers the refresh-and-retry path like
+    // every other MAL write (previously this bypassed it entirely). 404 = the
+    // entry is already gone — idempotent remove, not an error.
+    await this.#api(`/anime/${malAnimeId}/my_list_status`, {
       method: 'DELETE',
-      headers: { Authorization: `Bearer ${token}` },
-      signal: AbortSignal.timeout(env.MAL_API_TIMEOUT_MS),
+      token,
+      refresh,
+      okStatuses: [404],
     });
-    if (res.status !== 200 && res.status !== 404) {
-      throw ApiError.badGateway(`MyAnimeList remove failed (${res.status})`);
-    }
     await this.repository.deleteEntry(userId, malAnimeId);
     return { success: true };
   }

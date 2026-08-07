@@ -41,6 +41,9 @@ const envSchema = z.object({
   RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().default(15 * 60 * 1000),
   RATE_LIMIT_MAX: z.coerce.number().int().positive().default(300),
   AUTH_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(10),
+  // Refresh tokens are re-issued far more often than logins (every ~15 min
+  // per active tab), so refresh gets its own higher bucket.
+  REFRESH_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(60),
 
   LOG_LEVEL: z.enum(['error', 'warn', 'info', 'http', 'debug']).default('info'),
   LOG_FILE: z.string().optional(),

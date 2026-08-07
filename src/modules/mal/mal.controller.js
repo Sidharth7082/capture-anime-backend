@@ -3,9 +3,25 @@
 import { asyncHandler } from '../../lib/async-handler.js';
 import { env } from '../../config/env.js';
 import { ApiError } from '../../lib/errors.js';
+import { cookieIsSecure } from '../../lib/cookies.js';
 
 export function createMalController(malService) {
   const userId = (req) => req.user.sub;
+
+  // Same flags as the auth refresh cookie (shared cookieIsSecure()), so an
+  // http:// LAN deployment can't send a Secure cookie browsers refuse to
+  // store. clearCookie must mirror path/secure/sameSite or the deletion is
+  // ignored.
+  const malStateCookieOptions = {
+    httpOnly: true,
+    signed: true,
+    sameSite: 'lax',
+    secure: cookieIsSecure(),
+    path: '/api/mal',
+  };
+  const setMalStateCookie = (res, state) =>
+    res.cookie('mal_state', state, { ...malStateCookieOptions, maxAge: 10 * 60 * 1000 });
+  const clearMalStateCookie = (res) => res.clearCookie('mal_state', malStateCookieOptions);
 
   return {
     /**
@@ -32,35 +48,35 @@ export function createMalController(malService) {
       // the victim's MAL tokens to the attacker's backend user — an
       // account-linking CSRF. Note: same-site on LAN deployments; behind a
       // cross-site frontend the browser must accept third-party cookies.
-      res.cookie('mal_state', state, {
-        httpOnly: true,
-        signed: true,
-        sameSite: 'lax',
-        secure: env.NODE_ENV === 'production' && env.COOKIE_SECURE !== 'false',
-        path: '/api/mal',
-        maxAge: 10 * 60 * 1000,
-      });
+      setMalStateCookie(res, state);
       res.json({ authorizeUrl });
     }),
 
     /** MAL redirects here with ?code=&state= (or ?error= on denial). */
     callback: asyncHandler(async (req, res) => {
       const { code, state, error } = req.query;
+      // Every terminal path clears the state cookie — an orphaned cookie is
+      // useless to an attacker but lingers up to 10 min if never deleted.
       if (error || !code || !state) {
+        clearMalStateCookie(res);
         return res.redirect(`${env.FRONTEND_URL}/profile#mal=${error ? 'denied' : 'error'}`);
       }
       // The state in the URL must match the signed cookie set by /connect.
       // Reject when missing or mismatched — see the CSRF note in connect().
       if (!req.signedCookies.mal_state || req.signedCookies.mal_state !== state) {
+        clearMalStateCookie(res);
         return res.redirect(`${env.FRONTEND_URL}/profile#mal=error`);
       }
       try {
         await malService.handleCallback({ code, state });
-        res.clearCookie('mal_state', { path: '/api/mal' });
+        clearMalStateCookie(res);
         res.redirect(`${env.FRONTEND_URL}/profile#mal=connected`);
       } catch (err) {
-        // Surface the reason via a hash flag so the UI can show a toast.
-        const reason = err instanceof ApiError ? 'expired' : 'error';
+        // 4xx (expired/unknown state, dead session) => 'expired'; 5xx or
+        // network errors (MAL down) => 'error', so the UI doesn't tell users
+        // to tear down and re-link during a MAL outage.
+        const reason = err instanceof ApiError && err.status < 500 ? 'expired' : 'error';
+        clearMalStateCookie(res);
         res.redirect(`${env.FRONTEND_URL}/profile#mal=${reason}`);
       }
     }),

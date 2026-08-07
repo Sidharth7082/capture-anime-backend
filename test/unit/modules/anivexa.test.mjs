@@ -190,7 +190,10 @@ test('prefetch warms the cache for the first episodes', async () => {
 });
 
 test('not configured yields 503 STREAMING_NOT_CONFIGURED', async () => {
-  const svc = new AnivexaService({ baseUrl: undefined, providers: ['reanime'] });
+  // baseUrl: '' (not undefined) so the constructor's env.ANIVEXA_API_URL
+  // fallback can't accidentally configure the service from the developer's
+  // .env — the test must be deterministic.
+  const svc = new AnivexaService({ baseUrl: '', providers: ['reanime'] });
   await assert.rejects(() => svc.getWatch(1, 1), (err) => {
     assert.equal(err.status, 503);
     assert.equal(err.code, 'STREAMING_NOT_CONFIGURED');
