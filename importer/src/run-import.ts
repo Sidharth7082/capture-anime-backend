@@ -1,13 +1,15 @@
 /**
  * CLI: run the anime import once and exit.
  *
- *   npm run import:anime                       full catalogue
+ *   npm run import:anime                       full catalogue (resumes)
  *   npm run import:anime -- --limit 200        first 200 titles (test run)
  *   npm run import:anime -- --maxPages 5       first 5 pages
  *   npm run import:anime -- --dry-run          fetch + normalize, no DB writes
+ *   npm run import:anime -- --reset            ignore the saved resume point
  *
- * Ctrl-C stops cleanly at the next page boundary (upserts are idempotent,
- * so re-running resumes without duplicates).
+ * Resume: progress is stored in `import_jobs` after every page, so a crash
+ * or Ctrl-C continues from the last completed page on the next run.
+ * Ctrl-C stops cleanly at the next page boundary.
  */
 import "dotenv/config";
 import { loadEnv, createLogger } from "./index.js";
@@ -15,6 +17,7 @@ import { createJikanClient } from "./jikan.js";
 import { createDatabase } from "./database.js";
 import { createTypesense } from "./typesense.js";
 import { createImporter } from "./importer.js";
+import { createNoopJobStore } from "./pipeline/job-store.js";
 
 const env = loadEnv();
 const logger = createLogger(env.LOG_LEVEL);
@@ -30,9 +33,11 @@ function argNumber(name: string): number | undefined {
 const limit = argNumber("--limit");
 const maxPages = argNumber("--maxPages");
 const dryRun = args.includes("--dry-run");
+const reset = args.includes("--reset");
 if (limit != null) logger.info(`[cli] limit=${limit} items`);
 if (maxPages != null) logger.info(`[cli] maxPages=${maxPages}`);
 if (dryRun) logger.warn("[cli] DRY-RUN: fetching + normalizing only, no database writes");
+if (reset) logger.warn("[cli] RESET: ignoring the saved resume point");
 
 // --- deps -------------------------------------------------------------------
 const jikan = createJikanClient({ baseUrl: env.JIKAN_API_URL, timeoutMs: env.JIKAN_TIMEOUT_MS, retries: env.JIKAN_RETRY_COUNT, logger });
@@ -46,7 +51,17 @@ const typesense = createTypesense({
   collection: env.TYPESENSE_COLLECTION,
   logger,
 });
-const importer = createImporter({ jikan, db, typesense, pageDelayMs: env.JIKAN_PAGE_DELAY_MS, logger });
+const importer = createImporter({
+  jikan,
+  db: dryRun ? (null as unknown as ReturnType<typeof createDatabase>) : db,
+  typesense,
+  pageDelayMs: env.JIKAN_PAGE_DELAY_MS,
+  logger,
+});
+if (dryRun) {
+  // Swap in a no-op job store so dry-run never touches the database.
+  importer.setJobStore(createNoopJobStore());
+}
 
 // --- graceful stop ----------------------------------------------------------
 process.on("SIGINT", () => {
@@ -60,7 +75,7 @@ process.on("SIGTERM", () => {
 
 // --- run --------------------------------------------------------------------
 try {
-  const result = await importer.importAnime({ limit, maxPages, dryRun });
+  const result = await importer.importAnime({ limit, maxPages, dryRun, reset });
   logger.info(`[cli] done — ${result.summary}`);
   console.log(JSON.stringify(result, null, 2));
   process.exit(result.ok ? 0 : 1);

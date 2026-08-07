@@ -1,10 +1,10 @@
 /**
- * Unit tests for Stage 1 normalization (node:test, run via `npm test`).
+ * Unit tests for the Jikan anime normalizer (node:test, run via `npm test`).
  * Pure function coverage — no network, no database.
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { normalizeAnimeItem, type JikanAnime } from "./importer.js";
+import { normalizeAnimeItem, type JikanAnime } from "./normalizers.js";
 
 const BASE: JikanAnime = {
   mal_id: 16498,

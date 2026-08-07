@@ -7,6 +7,7 @@
  * method no-ops, so the rest of the pipeline can treat Typesense as optional.
  */
 import Typesense from "typesense";
+import type { Sink } from "./pipeline/types.js";
 
 export interface TypesenseConfig {
   enabled: boolean;
@@ -80,6 +81,17 @@ export function createTypesense(config: TypesenseConfig): TypesenseClient {
   return config.enabled ? new RealTypesense(config) : new NoopTypesense(config);
 }
 
+/**
+ * Pipeline sink — no-op until Stage 5 (Typesense indexing). Kept as the
+ * default so the runner's contract is exercised end to end.
+ */
+export function createNoopSink(logger?: Pick<Console, "debug" | "info" | "warn" | "error">): Sink<unknown> {
+  return {
+    async ingest(rows) {
+      logger?.debug?.(`[sink] no-op (Typesense disabled): ${rows.length} rows`);
+    },
+  };
+}
 // --- tiny URL helpers (keeps the typesense dep config simple) ---------------
 
 function hostOf(url: string): string {

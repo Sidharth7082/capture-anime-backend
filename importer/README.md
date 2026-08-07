@@ -8,25 +8,50 @@ It lives in its own folder with its own `package.json`/`tsconfig.json` and is
 **completely independent** from the Express API in `src/` — it only shares the
 database.
 
-> ⚠️ **Stage 1 — anime import implemented.** The importer now fetches the full
-> Jikan catalogue, normalizes each title and upserts it into the platform's
-> `anime` table by MAL id. Characters, episodes, studios, genres, relations,
-> themes, pictures, trailers and Typesense are **not** imported yet — they
-> arrive in later stages.
+> ⚠️ **Stage 1 — anime import implemented.** The importer fetches the full
+> Jikan catalogue through a reusable pipeline (fetch → normalize → validate →
+> upsert → sink) and writes it into the platform's `anime` table by MAL id,
+> with **resume support** (`import_jobs`). Characters, episodes, studios,
+> genres, relations, themes, pictures, trailers and Typesense are **not**
+> imported yet.
 
-## Layout
+## Pipeline
+
+Every data source (Jikan today; MAL user lists, AniList, TMDB, MangaDex,
+Kitsu later) plugs into the same pipeline — a new source only provides a
+**Fetcher** and a **Normalizer**:
+
+```text
+Source (Jikan)              pipeline/                platform
+        │
+        ▼
+  fetchers.ts ──► normalizers.ts ──► validator.ts ──► upsert-service.ts ──► PostgreSQL
+        │                            (zod)               │
+        │                                                 ▼
+        └────────────  runner.ts (pages, resume,          typesense.ts (Stage 5)
+                       bookkeeping, cancel) ──► job-store.ts (import_jobs)
+```
 
 ```
 importer/
 ├── src/
-│   ├── index.ts        # daemon entrypoint: env validation, wiring, shutdown
-│   ├── run-import.ts   # CLI: one-shot anime import (see "Importing anime")
-│   ├── jikan.ts        # Jikan v4 API client (axios, timeout, retry, types)
-│   ├── database.ts     # PostgreSQL pool wrapper (query, transaction, ping)
-│   ├── typesense.ts    # optional search-index client (no-op when disabled)
-│   ├── importer.ts     # Stage 1: normalizeAnimeItem + importAnime (upsert by mal_id)
-│   ├── scheduler.ts    # interval scheduler with overlap guard
-│   └── importer.test.ts# normalization unit tests
+│   ├── index.ts              # daemon entrypoint: env validation, wiring, shutdown
+│   ├── run-import.ts         # CLI: one-shot anime import (see below)
+│   ├── jikan.ts              # Jikan v4 API client (axios, timeout, retry, types)
+│   ├── database.ts           # PostgreSQL pool wrapper (query, transaction, ping)
+│   ├── typesense.ts          # optional search-index client + no-op pipeline sink
+│   ├── importer.ts           # composition root: wires the Jikan anime source
+│   ├── scheduler.ts          # interval scheduler with overlap guard
+│   └── pipeline/
+│       ├── types.ts          # Fetcher / Normalizer / Validator / UpsertPort /
+│       │                     #   Sink / JobStore contracts + NormalizedAnime
+│       ├── fetchers.ts       # JikanAnimeFetcher (other sources add one here)
+│       ├── normalizers.ts    # Jikan → platform row (pure, unit-tested)
+│       ├── validator.ts      # zod schema enforcing the anime table contract
+│       ├── upsert-service.ts # anime upsert by mal_id (per-row transaction)
+│       ├── job-store.ts      # import_jobs persistence (+ no-op for dry-run)
+│       ├── runner.ts         # generic pipeline: pagination, resume, counters
+│       └── *.test.ts         # normalizer / validator / runner unit tests
 ├── package.json
 ├── tsconfig.json
 ├── .env.example
@@ -62,30 +87,45 @@ npm install
 ## Importing anime (Stage 1)
 
 ```bash
-npm run import:anime                       # full catalogue
+npm run import:anime                       # full catalogue (resumes)
 npm run import:anime -- --limit 200        # first 200 titles (test first!)
 npm run import:anime -- --maxPages 5       # first 5 pages
 npm run import:anime -- --dry-run          # fetch + normalize, NO DB writes
+npm run import:anime -- --reset            # ignore the saved resume point
 ```
 
 How it works:
 
-1. Iterates `GET /v4/anime?page={page}` on the configured Jikan server until
-   `pagination.has_next_page` is false (sequential, with a polite per-page
-   delay — `JIKAN_PAGE_DELAY_MS`).
-2. Normalizes each title into the platform's `anime` row shape
-   (`src/importer.ts` — `normalizeAnimeItem`, unit-tested).
-3. Upserts **by MAL id** inside a per-row transaction: updates the existing
-   row when `anime.id_mal` matches, otherwise inserts a new row (with a NULL
-   `anilist_id` — see the migration note below).
-4. Logs every page: `page N: +inserted / ~updated / !failed (fetched)`.
-5. `Ctrl-C` (SIGINT/SIGTERM) stops at the next page boundary; upserts are
+1. The **pipeline runner** (`pipeline/runner.ts`) drives the Jikan source:
+   fetch page → normalize → validate (zod) → upsert by `mal_id` (per-row
+   transaction) → per-page progress persisted.
+2. Iterates `GET /v4/anime?page={page}` until `pagination.has_next_page` is
+   false (sequential, with a polite per-page delay —
+   `JIKAN_PAGE_DELAY_MS`).
+3. Logs every page: `page N: +inserted / ~updated / !failed (fetched)`.
+4. `Ctrl-C` (SIGINT/SIGTERM) stops at the next page boundary; upserts are
    idempotent, so re-running resumes cleanly.
 
-> **Migration required once** (applies to the shared database, in the repo
-> root): `db/migrations/0007_importer_anime_id.up.sql` makes `anime.anilist_id`
-> nullable (Jikan titles have no AniList id) and indexes `anime.id_mal`.
-> Apply with the repo's normal migration runner (`npm run migrate`).
+### Resume support
+
+After every successful page the runner writes `last_page` into the
+`import_jobs` table (one row per source). A crash on page 1,247 therefore
+resumes at page **1,248** on the next run — no re-fetching. `--reset`
+starts from page 1; dry-runs never touch the job table. Job rows record
+`status` (`running` / `completed` / `failed`), `total_items`,
+`started_at` / `finished_at` and the last `error`, so you can inspect the
+history per source:
+
+```sql
+SELECT source, status, last_page, total_items, started_at, finished_at
+FROM import_jobs;
+```
+
+> **Migrations required once** (apply from the repo root with
+> `npm run migrate`):
+> - `0007_importer_anime_id` — `anime.anilist_id` nullable (Jikan titles have
+>   no AniList id) + `anime_id_mal_idx`
+> - `0008_import_jobs` — resume/progress table
 
 Covered fields (Stage 1): mal_id, titles (romaji/english/native/synonyms),
 description, type→format, status, source, episodes, duration, aired dates,
