@@ -45,9 +45,13 @@ export function errorHandler(err, req, res, _next) {
 
   if (status >= 500) {
     logger.error(`[${req.method} ${req.originalUrl}] ${err.stack || err.message}`);
-    message = 'Internal server error';
-    code = 'INTERNAL_ERROR';
-    details = undefined;
+    // Sanitize 5xx messages unless the error explicitly opted in to exposing
+    // a safe diagnostic (e.g. missing env var names on an authed endpoint).
+    if (!err.expose) {
+      message = 'Internal server error';
+      code = 'INTERNAL_ERROR';
+      details = undefined;
+    }
   } else {
     logger.warn(`[${req.method} ${req.originalUrl}] ${status} ${code}: ${message}`);
   }

@@ -15,8 +15,14 @@ export function createMalController(malService) {
      * verifier + user id were persisted server-side keyed by `state`.
      */
     connect: asyncHandler(async (req, res) => {
-      if (!malService.configured) {
-        throw ApiError.serviceUnavailable('MyAnimeList is not configured on this server.');
+      const status = malService.configStatus();
+      if (!status.configured) {
+        throw ApiError.serviceUnavailable(
+          `MyAnimeList is not configured: missing ${status.missing.join(', ')}. ` +
+            'Set them in the server .env and restart the process.',
+          undefined,
+          true, // expose — safe diagnostic on an authenticated endpoint
+        );
       }
       const { authorizeUrl } = await malService.buildAuthorizeUrl(req.user.sub);
       res.json({ authorizeUrl });

@@ -52,6 +52,17 @@ export class MalService {
     return Boolean(env.MAL_CLIENT_ID && env.MAL_TOKEN_ENCRYPTION_KEY);
   }
 
+  /**
+   * Diagnostics: which required MAL vars are missing from the process env.
+   * @returns {{ configured: boolean, missing: string[] }}
+   */
+  configStatus() {
+    const missing = [];
+    if (!env.MAL_CLIENT_ID) missing.push('MAL_CLIENT_ID');
+    if (!env.MAL_TOKEN_ENCRYPTION_KEY) missing.push('MAL_TOKEN_ENCRYPTION_KEY');
+    return { configured: missing.length === 0, missing };
+  }
+
   #requireConfigured() {
     if (!env.MAL_CLIENT_ID) {
       throw ApiError.serviceUnavailable('MyAnimeList is not configured (MAL_CLIENT_ID).');

@@ -3,13 +3,37 @@ import { createProductionApp } from './app.js';
 import { env } from './config/env.js';
 import { logger } from './lib/logger.js';
 import { pool } from './db/pool.js';
+import { encryptSecret, decryptSecret } from './lib/crypto.js';
 import { createAuthRepository } from './modules/auth/auth.repository.js';
 import { createAuthService } from './modules/auth/auth.service.js';
+import { createMalRepository } from './modules/mal/mal.repository.js';
+import { MalService } from './modules/mal/mal.service.js';
 
 const app = createProductionApp();
 const server = app.listen(env.PORT, () => {
   logger.info(`Anime Platform API listening on http://0.0.0.0:${env.PORT} (${env.NODE_ENV})`);
   logger.info(`Swagger docs: http://localhost:${env.PORT}/api-docs`);
+
+  // MAL config diagnostics — check `pm2 logs` if "Connect MyAnimeList" fails.
+  const mal = new MalService({ repository: createMalRepository(pool) });
+  const status = mal.configStatus();
+  if (!status.configured) {
+    logger.warn(
+      `MyAnimeList sync DISABLED — missing env vars: ${status.missing.join(', ')}. ` +
+        'Set them in the .env file in the app root and restart.',
+    );
+    return;
+  }
+  try {
+    decryptSecret(encryptSecret('probe'));
+    logger.info('MyAnimeList sync enabled (MAL_CLIENT_ID + MAL_TOKEN_ENCRYPTION_KEY OK).');
+  } catch {
+    logger.warn(
+      'MyAnimeList sync enabled but MAL_TOKEN_ENCRYPTION_KEY does not decode to 32 bytes — ' +
+        'token encryption will fail. Generate one with: ' +
+        "node -e \"console.log(require('crypto').randomBytes(32).toString('base64'))\"",
+    );
+  }
 });
 
 // Housekeeping: prune expired refresh tokens (6h default). unref() keeps the

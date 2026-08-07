@@ -61,6 +61,7 @@ function makeFakes(overrides = {}) {
 
   const malService = {
     configured: true,
+    configStatus: () => ({ configured: true, missing: [] }),
     buildAuthorizeUrl: async (userId) => ({
       authorizeUrl: 'https://myanimelist.net/v1/oauth2/authorize?response_type=code&client_id=x&code_challenge=ch&code_challenge_method=S256&state=s',
       state: 's',
@@ -387,4 +388,17 @@ test('swagger spec is served', async () => {
   assert.ok(json.body.paths['/api/auth/login']);
   const ui = await request(app).get('/api-docs/');
   assert.equal(ui.status, 200);
+});
+
+test('mal connect reports exactly which env vars are missing (503)', async () => {
+  const app = buildApp({
+    mal: {
+      configStatus: () => ({ configured: false, missing: ['MAL_CLIENT_ID', 'MAL_TOKEN_ENCRYPTION_KEY'] }),
+    },
+  });
+  const token = signAccessToken({ id: 'u1', username: 'alice', role: 'viewer' });
+  const res = await request(app).get('/api/mal/connect').set('Authorization', `Bearer ${token}`);
+  assert.equal(res.status, 503);
+  assert.match(res.body.error.message, /MAL_CLIENT_ID/);
+  assert.match(res.body.error.message, /MAL_TOKEN_ENCRYPTION_KEY/);
 });
