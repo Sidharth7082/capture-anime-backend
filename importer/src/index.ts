@@ -23,6 +23,7 @@ const envSchema = z.object({
   JIKAN_API_URL: z.string().url(),
   JIKAN_TIMEOUT_MS: z.coerce.number().int().positive().default(15_000),
   JIKAN_RETRY_COUNT: z.coerce.number().int().min(0).max(10).default(3),
+  JIKAN_PAGE_DELAY_MS: z.coerce.number().int().min(0).default(150),
 
   DATABASE_URL: z.string().min(1, "DATABASE_URL is required"),
   PG_POOL_MAX: z.coerce.number().int().min(1).max(100).default(5),
@@ -37,9 +38,9 @@ const envSchema = z.object({
   SCHEDULER_INTERVAL_MS: z.coerce.number().int().min(1).default(3_600_000),
 });
 
-type Env = z.infer<typeof envSchema>;
+export type Env = z.infer<typeof envSchema>;
 
-function loadEnv(): Env {
+export function loadEnv(): Env {
   const parsed = envSchema.safeParse(process.env);
   if (!parsed.success) {
     const issues = parsed.error.issues
@@ -57,7 +58,9 @@ function loadEnv(): Env {
 type Level = "debug" | "info" | "warn" | "error";
 const LEVEL_ORDER: Record<Level, number> = { debug: 0, info: 1, warn: 2, error: 3 };
 
-function createLogger(level: Level): Pick<Console, "debug" | "info" | "warn" | "error"> {
+export type Logger = Pick<Console, "debug" | "info" | "warn" | "error">;
+
+export function createLogger(level: Level): Logger {
   const min = LEVEL_ORDER[level];
   const log = (lvl: Level, ...args: unknown[]) => {
     if (LEVEL_ORDER[lvl] >= min) {
@@ -95,7 +98,13 @@ async function main(): Promise<void> {
     logger,
   });
 
-  const importer = createImporter({ jikan, db, typesense, logger });
+  const importer = createImporter({
+    jikan,
+    db,
+    typesense,
+    pageDelayMs: env.JIKAN_PAGE_DELAY_MS,
+    logger,
+  });
 
   // Health probes (non-fatal — log and continue).
   const [jikanOk, dbOk, tsOk] = await Promise.all([jikan.ping(), db.ping(), typesense.ping()]);
@@ -131,7 +140,13 @@ async function main(): Promise<void> {
   process.on("SIGTERM", () => void shutdown("SIGTERM"));
 }
 
-main().catch((err) => {
-  console.error(`[boot] fatal: ${String(err)}`);
-  process.exit(1);
-});
+// Run only when executed directly (`node dist/index.js` / `npm run dev`).
+// Importing this module from the CLI (run-import.ts) must NOT boot the daemon.
+import { pathToFileURL } from "node:url";
+const isMain = process.argv[1] != null && import.meta.url === pathToFileURL(process.argv[1]).href;
+if (isMain) {
+  main().catch((err) => {
+    console.error(`[boot] fatal: ${String(err)}`);
+    process.exit(1);
+  });
+}

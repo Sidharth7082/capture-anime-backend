@@ -41,6 +41,28 @@ export class Database {
     return this.pool.query<T>(text, params);
   }
 
+  /**
+   * Run `fn` inside a transaction (BEGIN/COMMIT/ROLLBACK). The client is
+   * always released, even on error. Used by the importer for per-row
+   * atomic upserts.
+   */
+  async transaction<T>(fn: (client: pg.PoolClient) => Promise<T>): Promise<T> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const result = await fn(client);
+      await client.query("COMMIT");
+      return result;
+    } catch (err) {
+      await client.query("ROLLBACK").catch(() => {
+        // connection may already be broken — nothing else to clean up
+      });
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+
   /** Simple `SELECT 1` health check. */
   async ping(): Promise<boolean> {
     try {

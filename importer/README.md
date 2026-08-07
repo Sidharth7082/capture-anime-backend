@@ -8,21 +8,25 @@ It lives in its own folder with its own `package.json`/`tsconfig.json` and is
 **completely independent** from the Express API in `src/` — it only shares the
 database.
 
-> ⚠️ **Scaffold stage.** The infrastructure (clients, database wrapper, types,
-> scheduler, container) is in place, but **no importing is implemented yet**.
-> Each importer stage will be added step by step inside `src/importer.ts`.
+> ⚠️ **Stage 1 — anime import implemented.** The importer now fetches the full
+> Jikan catalogue, normalizes each title and upserts it into the platform's
+> `anime` table by MAL id. Characters, episodes, studios, genres, relations,
+> themes, pictures, trailers and Typesense are **not** imported yet — they
+> arrive in later stages.
 
 ## Layout
 
 ```
 importer/
 ├── src/
-│   ├── index.ts        # entrypoint: env validation, wiring, shutdown
+│   ├── index.ts        # daemon entrypoint: env validation, wiring, shutdown
+│   ├── run-import.ts   # CLI: one-shot anime import (see "Importing anime")
 │   ├── jikan.ts        # Jikan v4 API client (axios, timeout, retry, types)
-│   ├── database.ts     # PostgreSQL pool wrapper (query + ping)
+│   ├── database.ts     # PostgreSQL pool wrapper (query, transaction, ping)
 │   ├── typesense.ts    # optional search-index client (no-op when disabled)
-│   ├── importer.ts     # orchestrator — the steps land here
-│   └── scheduler.ts    # interval scheduler with overlap guard
+│   ├── importer.ts     # Stage 1: normalizeAnimeItem + importAnime (upsert by mal_id)
+│   ├── scheduler.ts    # interval scheduler with overlap guard
+│   └── importer.test.ts# normalization unit tests
 ├── package.json
 ├── tsconfig.json
 ├── .env.example
@@ -50,8 +54,45 @@ npm install
 |---|---|
 | `npm run dev` | watch mode via `tsx` (auto-restart on change) |
 | `npm run build` | type-check + compile to `dist/` (ESM) |
-| `npm run start` | run the compiled build (`node dist/index.js`) |
+| `npm run start` | run the compiled daemon (`node dist/index.js`) |
+| `npm run import:anime` | one-shot anime catalogue import (see below) |
 | `npm run typecheck` | type-check only, no emit |
+| `npm test` | unit tests (normalization) |
+
+## Importing anime (Stage 1)
+
+```bash
+npm run import:anime                       # full catalogue
+npm run import:anime -- --limit 200        # first 200 titles (test first!)
+npm run import:anime -- --maxPages 5       # first 5 pages
+npm run import:anime -- --dry-run          # fetch + normalize, NO DB writes
+```
+
+How it works:
+
+1. Iterates `GET /v4/anime?page={page}` on the configured Jikan server until
+   `pagination.has_next_page` is false (sequential, with a polite per-page
+   delay — `JIKAN_PAGE_DELAY_MS`).
+2. Normalizes each title into the platform's `anime` row shape
+   (`src/importer.ts` — `normalizeAnimeItem`, unit-tested).
+3. Upserts **by MAL id** inside a per-row transaction: updates the existing
+   row when `anime.id_mal` matches, otherwise inserts a new row (with a NULL
+   `anilist_id` — see the migration note below).
+4. Logs every page: `page N: +inserted / ~updated / !failed (fetched)`.
+5. `Ctrl-C` (SIGINT/SIGTERM) stops at the next page boundary; upserts are
+   idempotent, so re-running resumes cleanly.
+
+> **Migration required once** (applies to the shared database, in the repo
+> root): `db/migrations/0007_importer_anime_id.up.sql` makes `anime.anilist_id`
+> nullable (Jikan titles have no AniList id) and indexes `anime.id_mal`.
+> Apply with the repo's normal migration runner (`npm run migrate`).
+
+Covered fields (Stage 1): mal_id, titles (romaji/english/native/synonyms),
+description, type→format, status, source, episodes, duration, aired dates,
+season/year, score (×10 → 0–100), members→popularity, favorites, is_adult
+(Rx rating), cover images. Everything else (trailers, banner, genres,
+studios, characters, episodes rows, Typesense) stays untouched for later
+stages.
 
 ## Configuration (`.env`)
 
