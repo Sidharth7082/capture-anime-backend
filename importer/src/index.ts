@@ -1,0 +1,137 @@
+/**
+ * Importer entrypoint.
+ *
+ * Boot sequence: load + validate env -> build the service clients -> run one
+ * import (optional) -> start the scheduler -> wait for signals. Shuts down
+ * cleanly on SIGINT/SIGTERM so Docker can stop the container gracefully.
+ */
+import "dotenv/config";
+import { z } from "zod";
+import { createJikanClient, type JikanClient } from "./jikan.js";
+import { createDatabase, type Database } from "./database.js";
+import { createTypesense, type TypesenseClient } from "./typesense.js";
+import { createImporter } from "./importer.js";
+import { createScheduler } from "./scheduler.js";
+
+// ---------------------------------------------------------------------------
+// Environment (validated once at boot — fail fast with the exact missing key)
+// ---------------------------------------------------------------------------
+const envSchema = z.object({
+  NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
+  LOG_LEVEL: z.enum(["debug", "info", "warn", "error"]).default("info"),
+
+  JIKAN_API_URL: z.string().url(),
+  JIKAN_TIMEOUT_MS: z.coerce.number().int().positive().default(15_000),
+  JIKAN_RETRY_COUNT: z.coerce.number().int().min(0).max(10).default(3),
+
+  DATABASE_URL: z.string().min(1, "DATABASE_URL is required"),
+  PG_POOL_MAX: z.coerce.number().int().min(1).max(100).default(5),
+
+  TYPESENSE_ENABLED: z.enum(["true", "false"]).default("false"),
+  TYPESENSE_URL: z.string().url().optional(),
+  TYPESENSE_API_KEY: z.string().min(1).optional(),
+  TYPESENSE_COLLECTION: z.string().min(1).default("anime"),
+
+  RUN_ON_START: z.enum(["true", "false"]).default("true"),
+  SCHEDULER_ENABLED: z.enum(["true", "false"]).default("true"),
+  SCHEDULER_INTERVAL_MS: z.coerce.number().int().min(1).default(3_600_000),
+});
+
+type Env = z.infer<typeof envSchema>;
+
+function loadEnv(): Env {
+  const parsed = envSchema.safeParse(process.env);
+  if (!parsed.success) {
+    const issues = parsed.error.issues
+      .map((i) => `  - ${i.path.join(".")}: ${i.message}`)
+      .join("\n");
+    console.error(`Invalid environment configuration:\n${issues}\nSee importer/.env.example`);
+    process.exit(1);
+  }
+  return parsed.data;
+}
+
+// ---------------------------------------------------------------------------
+// Logging (tiny leveled logger — no extra dependency)
+// ---------------------------------------------------------------------------
+type Level = "debug" | "info" | "warn" | "error";
+const LEVEL_ORDER: Record<Level, number> = { debug: 0, info: 1, warn: 2, error: 3 };
+
+function createLogger(level: Level): Pick<Console, "debug" | "info" | "warn" | "error"> {
+  const min = LEVEL_ORDER[level];
+  const log = (lvl: Level, ...args: unknown[]) => {
+    if (LEVEL_ORDER[lvl] >= min) {
+      const line = args.map((a) => (typeof a === "string" ? a : JSON.stringify(a))).join(" ");
+      console[lvl === "debug" ? "log" : lvl](`${new Date().toISOString()} [${lvl.toUpperCase()}] ${line}`);
+    }
+  };
+  return {
+    debug: (...a) => log("debug", ...a),
+    info: (...a) => log("info", ...a),
+    warn: (...a) => log("warn", ...a),
+    error: (...a) => log("error", ...a),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Wiring
+// ---------------------------------------------------------------------------
+async function main(): Promise<void> {
+  const env = loadEnv();
+  const logger = createLogger(env.LOG_LEVEL);
+
+  const jikan: JikanClient = createJikanClient({
+    baseUrl: env.JIKAN_API_URL,
+    timeoutMs: env.JIKAN_TIMEOUT_MS,
+    retries: env.JIKAN_RETRY_COUNT,
+    logger,
+  });
+  const db: Database = createDatabase({ connectionString: env.DATABASE_URL, max: env.PG_POOL_MAX, logger });
+  const typesense: TypesenseClient = createTypesense({
+    enabled: env.TYPESENSE_ENABLED === "true",
+    url: env.TYPESENSE_URL ?? "http://localhost:8108",
+    apiKey: env.TYPESENSE_API_KEY ?? "",
+    collection: env.TYPESENSE_COLLECTION,
+    logger,
+  });
+
+  const importer = createImporter({ jikan, db, typesense, logger });
+
+  // Health probes (non-fatal — log and continue).
+  const [jikanOk, dbOk, tsOk] = await Promise.all([jikan.ping(), db.ping(), typesense.ping()]);
+  logger.info(`[boot] jikan=${jikanOk ? "up" : "DOWN"} (${jikan.baseUrl})`);
+  logger.info(`[boot] database=${dbOk ? "up" : "DOWN"}`);
+  logger.info(`[boot] typesense=${env.TYPESENSE_ENABLED === "true" ? (tsOk ? "up" : "DOWN") : "disabled"}`);
+
+  const scheduler = createScheduler(() => importer.run(), {
+    intervalMs: env.SCHEDULER_INTERVAL_MS,
+    runOnStart: env.RUN_ON_START === "true",
+    logger,
+  });
+
+  if (env.SCHEDULER_ENABLED === "true") {
+    scheduler.start();
+    logger.info(`[boot] scheduler enabled (interval ${env.SCHEDULER_INTERVAL_MS}ms, run-on-start=${env.RUN_ON_START})`);
+  } else {
+    logger.info("[boot] scheduler disabled — run a single import and exit");
+    await importer.run();
+  }
+
+  // Graceful shutdown.
+  let shuttingDown = false;
+  const shutdown = async (signal: string) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    logger.info(`[boot] received ${signal} — shutting down`);
+    await scheduler.stop();
+    await db.close();
+    process.exit(0);
+  };
+  process.on("SIGINT", () => void shutdown("SIGINT"));
+  process.on("SIGTERM", () => void shutdown("SIGTERM"));
+}
+
+main().catch((err) => {
+  console.error(`[boot] fatal: ${String(err)}`);
+  process.exit(1);
+});
