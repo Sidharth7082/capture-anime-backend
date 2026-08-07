@@ -274,3 +274,16 @@ test('disconnect clears the account', async () => {
   const out = await makeService(repo, makeMalHttp().http).disconnect('u1');
   assert.equal(out.success, true);
 });
+
+test('authorize URL contains NO redirect_uri param (single-URL by construction)', async () => {
+  const repo = makeRepo();
+  const { authorizeUrl } = await makeService(repo, makeMalHttp().http).buildAuthorizeUrl('u1');
+  const u = new URL(authorizeUrl);
+  assert.equal(u.searchParams.get('redirect_uri'), null, 'must not send redirect_uri');
+  assert.equal(u.searchParams.getAll('redirect_uri').length, 0, 'exactly zero redirect_uri params');
+  // The only query params allowed are the PKCE/OAuth core ones.
+  const allowed = ['response_type', 'client_id', 'code_challenge', 'code_challenge_method', 'state'];
+  for (const key of u.searchParams.keys()) {
+    assert.ok(allowed.includes(key), `unexpected query param: ${key}`);
+  }
+});
