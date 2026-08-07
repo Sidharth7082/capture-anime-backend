@@ -9,6 +9,7 @@
  */
 import type { Database } from "../database.js";
 import type { MetadataRef, NormalizedAnime, UpsertPort } from "./types.js";
+import { makeSlug } from "./normalizers.js";
 
 // Columns populated by Stage 1. `media_type` keeps its default 'ANIME';
 // trailers/pictures/color stay NULL until their stages land.
@@ -101,7 +102,11 @@ async function resolveMetadataId(
     [ref.malId],
   );
   const byMalId = byMal.rows[0];
-  if (byMalId) return byMalId.id;
+  if (byMalId) {
+    // Seen in this sync — bump the sync cursor (cheap, keyed by PK).
+    await client.query(`UPDATE ${table} SET last_synced_at = now() WHERE id = $1`, [byMalId.id]);
+    return byMalId.id;
+  }
 
   // 2) by name (links rows imported without a MAL id, e.g. from AniList)
   const byName = await client.query<{ id: number }>(
@@ -110,11 +115,11 @@ async function resolveMetadataId(
   );
   const byNameId = byName.rows[0];
   if (byNameId) {
-    await client.query(`UPDATE ${table} SET mal_id = $1 WHERE id = $2`, [ref.malId, byNameId.id]);
+    await client.query(`UPDATE ${table} SET mal_id = $1, updated_at = now(), last_synced_at = now() WHERE id = $2`, [ref.malId, byNameId.id]);
     return byNameId.id;
   }
 
-  // 3) create
+  // 3) create (created_at/updated_at/last_synced_at default to now())
   const inserted = await client.query<{ id: number }>(
     `INSERT INTO ${table} (mal_id, name) VALUES ($1, $2) RETURNING id`,
     [ref.malId, ref.name],
@@ -128,28 +133,43 @@ export class AnimeUpsertService implements UpsertPort<NormalizedAnime> {
   /** Upsert one anime + its metadata by mal_id (atomic). Returns 'inserted' | 'updated'. */
   async upsert(row: NormalizedAnime): Promise<"inserted" | "updated"> {
     return this.db.transaction(async (client) => {
-      const existing = await client.query<{ id: number }>(
-        "SELECT id FROM anime WHERE id_mal = $1 ORDER BY id LIMIT 1",
+      const existing = await client.query<{ id: number; slug: string | null }>(
+        "SELECT id, slug FROM anime WHERE id_mal = $1 ORDER BY id LIMIT 1",
         [row.idMal],
       );
       const existingRow = existing.rows[0];
+      const base = makeSlug(row.titleRomaji ?? row.titleEnglish, row.idMal);
 
       let animeId: number;
       let outcome: "inserted" | "updated";
 
       if (existingRow) {
-        const params = [...rowValues(row), existingRow.id];
+        // Stable slug: keep a real title slug; replace only the backfilled
+        // 'anime-{malId}' fallback with the title-based one.
+        let slug = existingRow.slug;
+        if (!slug || slug === `anime-${row.idMal}`) {
+          const taken = await client.query(
+            "SELECT 1 FROM anime WHERE slug = $1 AND id <> $2 LIMIT 1",
+            [base, existingRow.id],
+          );
+          slug = taken.rows.length > 0 ? `${base}-${row.idMal}` : base;
+        }
+        const params = [...rowValues(row), slug, existingRow.id];
         await client.query(
-          `UPDATE anime SET ${COLUMN_SET_CLAUSE}, updated_at = now() WHERE id = $${params.length}`,
+          `UPDATE anime SET ${COLUMN_SET_CLAUSE}, slug = $${params.length - 1}, updated_at = now(), last_synced_at = now() WHERE id = $${params.length}`,
           params,
         );
         animeId = existingRow.id;
         outcome = "updated";
       } else {
+        // Fresh row: title slug, suffixed when another anime already owns it.
+        const taken = await client.query("SELECT 1 FROM anime WHERE slug = $1 LIMIT 1", [base]);
+        const slug = taken.rows.length > 0 ? `${base}-${row.idMal}` : base;
+        const params = [...rowValues(row), slug];
         const inserted = await client.query<{ id: number }>(
-          `INSERT INTO anime (anilist_id, ${ANIME_COLUMNS.join(", ")})
-           VALUES (NULL, ${ANIME_COLUMNS.map((_, i) => `$${i + 1}`).join(", ")}) RETURNING id`,
-          rowValues(row),
+          `INSERT INTO anime (anilist_id, ${ANIME_COLUMNS.join(", ")}, slug, last_synced_at)
+           VALUES (NULL, ${ANIME_COLUMNS.map((_, i) => `$${i + 1}`).join(", ")}, $${params.length}, now()) RETURNING id`,
+          params,
         );
         animeId = inserted.rows[0]!.id;
         outcome = "inserted";

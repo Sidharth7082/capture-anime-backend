@@ -45,7 +45,7 @@ async function resolveCharacterId(
     const id = byMal.rows[0].id;
     await client.query(
       `UPDATE characters SET name_first = $2, name_last = $3, name_native = $4,
-       image_large = $5, image_medium = $5, updated_at = now() WHERE id = $1`,
+       image_large = $5, image_medium = $5, updated_at = now(), last_synced_at = now() WHERE id = $1`,
       [id, first, last, c.nameKanji, c.imageUrl],
     );
     return id;
@@ -58,7 +58,7 @@ async function resolveCharacterId(
     const id = byName.rows[0].id;
     await client.query(
       `UPDATE characters SET mal_id = $2, name_last = $3, name_native = $4,
-       image_large = $5, image_medium = $5, updated_at = now() WHERE id = $1`,
+       image_large = $5, image_medium = $5, updated_at = now(), last_synced_at = now() WHERE id = $1`,
       [id, c.malId, last, c.nameKanji, c.imageUrl],
     );
     return id;
@@ -85,7 +85,7 @@ async function resolveStaffId(
     const id = byMal.rows[0].id;
     await client.query(
       `UPDATE staff SET name_first = $2, name_last = $3, image_large = $4,
-       language = COALESCE($5, language), updated_at = now() WHERE id = $1`,
+       language = COALESCE($5, language), updated_at = now(), last_synced_at = now() WHERE id = $1`,
       [id, first, last, s.imageUrl, language],
     );
     return id;
@@ -98,7 +98,7 @@ async function resolveStaffId(
     const id = byName.rows[0].id;
     await client.query(
       `UPDATE staff SET mal_id = $2, name_last = $3, image_large = $4,
-       language = COALESCE($5, language), updated_at = now() WHERE id = $1`,
+       language = COALESCE($5, language), updated_at = now(), last_synced_at = now() WHERE id = $1`,
       [id, s.malId, last, s.imageUrl, language],
     );
     return id;
@@ -124,6 +124,9 @@ export class AnimeEnrichUpsertService implements UpsertPort<NormalizedAnimeEnric
       const animeRow = existing.rows[0];
       if (!animeRow) return "updated" as const; // not in the catalog yet
       const animeId = animeRow.id;
+
+      // Sync cursor: this anime was just enriched.
+      await client.query("UPDATE anime SET last_synced_at = now() WHERE id = $1", [animeId]);
 
       await this.writeCharactersAndVoiceActors(client, animeId, row);
       await this.writeStaff(client, animeId, row);

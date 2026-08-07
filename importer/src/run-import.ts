@@ -59,6 +59,7 @@ const importer = createImporter({
   typesense,
   pageDelayMs: env.JIKAN_PAGE_DELAY_MS,
   enrichBatchSize: env.ENRICH_BATCH_SIZE,
+  enrichStaleDays: env.ENRICH_STALE_DAYS,
   logger,
 });
 if (dryRun) {

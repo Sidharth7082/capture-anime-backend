@@ -4,7 +4,7 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { normalizeAnimeItem, normalizeAnimeEnrichment, type JikanAnime } from "./normalizers.js";
+import { normalizeAnimeItem, normalizeAnimeEnrichment, makeSlug, type JikanAnime } from "./normalizers.js";
 
 const BASE: JikanAnime = {
   mal_id: 16498,
@@ -230,4 +230,14 @@ test("enrichment drops invalid entries and maps unknown roles to BACKGROUND", ()
   assert.equal(row.pictures.length, 0);
   assert.equal(row.videos.length, 1);
   assert.equal(row.videos[0]!.episodeNumber, 3);
+});
+
+test("makeSlug kebab-cases titles and falls back to anime-{malId}", () => {
+  assert.equal(makeSlug("Cowboy Bebop", 1), "cowboy-bebop");
+  assert.equal(makeSlug("Shingeki no Kyojin!", 16498), "shingeki-no-kyojin");
+  assert.equal(makeSlug("Spy × Family", 50265), "spy-family");
+  assert.equal(makeSlug("Été", 9), "ete");
+  assert.equal(makeSlug(null, 5), "anime-5");
+  assert.equal(makeSlug("   ", 5), "anime-5");
+  assert.equal(makeSlug("a".repeat(200), 7).length <= 120, true);
 });

@@ -105,8 +105,7 @@ function parseDurationMinutes(duration: string | null | undefined): number | nul
   return match ? Number(match[1]) : null;
 }
 
-/** Normalize an embedded MAL metadata array into unique MetadataRef[]. */
-function normalizeMetadata(refs: { mal_id?: number; name?: string }[] | null | undefined): MetadataRef[] {
+/** Normalize an embedded MAL metadata array into unique MetadataRef[]. */function normalizeMetadata(refs: { mal_id?: number; name?: string }[] | null | undefined): MetadataRef[] {
   if (!Array.isArray(refs)) return [];
   const seen = new Set<number>();
   const out: MetadataRef[] = [];
@@ -362,4 +361,22 @@ export function normalizeAnimeEnrichment(bundle: JikanEnrichmentBundle): Normali
     pictures,
     videos,
   };
+}
+
+// --- URL slug -----------------------------------------------------------------
+
+/**
+ * Build a URL slug from a title. Pure + deterministic: kebab-cased romaji/
+ * english title, `anime-{malId}` when there is no usable title. Uniqueness
+ * is guaranteed by the upsert appending `-{malId}` on collision.
+ */
+export function makeSlug(title: string | null | undefined, idMal: number): string {
+  const base = title
+    ?.normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "") // strip diacritics
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .replace(/-{2,}/g, "-");
+  return (base && base.length > 0 ? base : `anime-${idMal}`).slice(0, 120);
 }

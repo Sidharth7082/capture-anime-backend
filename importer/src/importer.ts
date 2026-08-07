@@ -36,6 +36,8 @@ export interface ImportDeps {
   pageDelayMs?: number;
   /** Enrichment batch size (anime per page, each = 6 detail requests). */
   enrichBatchSize?: number;
+  /** Only enrich anime not synced in this many days (0 = all). */
+  enrichStaleDays?: number;
   logger?: Pick<Console, "debug" | "info" | "warn" | "error">;
 }
 
@@ -127,6 +129,8 @@ export class Importer {
       const empty: RunResult = { ok: true, fetched: 0, inserted: 0, updated: 0, failed: 0, summary: "jikan-enrich: no database (dry-run)" };
       return empty;
     }
+    const staleDays = this.deps.enrichStaleDays ?? 0;
+    this.logger.info(`[jikan-enrich] stale filter: last_synced_at < now() - ${staleDays}d (0 = all)`);
     metrics?.recordStart("jikan-enrich");
     const batchSize = this.deps.enrichBatchSize ?? 10;
     try {
@@ -136,8 +140,12 @@ export class Importer {
           fetcher: createJikanEnrichFetcher({
             jikan: this.deps.jikan,
             listAnime: async () => {
-              const rows = await this.deps.db.query<{ id: number; id_mal: number }>(
-                "SELECT id, id_mal FROM anime ORDER BY id_mal",
+              const staleDays = this.deps.enrichStaleDays ?? 0;
+              const rows = await this.deps.db!.query<{ id: number; id_mal: number }>(
+                `SELECT id, id_mal FROM anime
+                 WHERE last_synced_at IS NULL OR last_synced_at < NOW() - make_interval(days => $1)
+                 ORDER BY id_mal`,
+                [staleDays],
               );
               return rows.rows.map((r) => ({ id: r.id, idMal: r.id_mal }));
             },

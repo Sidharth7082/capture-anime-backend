@@ -133,6 +133,26 @@ FROM import_jobs;
 > - `0007_importer_anime_id` — `anime.anilist_id` nullable (Jikan titles have
 >   no AniList id) + `anime_id_mal_idx`
 > - `0008_import_jobs` — resume/progress table
+> - `0009_metadata_tables` — genres/studios `mal_id`, producers/licensors/
+>   themes/demographics tables
+> - `0010_enrichment_content` — characters/staff `mal_id`, content tables
+> - `0011_schema_hardening` — unique external ids (`anime.id_mal`, `slug`),
+>   `updated_at` + `last_synced_at` on every imported table
+
+### Sync timestamps & stale refresh
+
+Every imported table now carries `created_at`, `updated_at` and
+`last_synced_at` (entity tables). The importer bumps `last_synced_at = now()`
+on every row it touches, so incremental refreshes only re-fetch stale data:
+
+```sql
+SELECT id, id_mal FROM anime
+WHERE last_synced_at IS NULL OR last_synced_at < NOW() - interval '30 days';
+```
+
+The enrichment source honors this directly via `ENRICH_STALE_DAYS`
+(default `0` = everything; e.g. `30` refreshes only anime not synced in a
+month).
 
 Covered fields: mal_id, titles (romaji/english/native/synonyms), description,
 type→format, status, source, episodes, duration, aired dates, season/year,
@@ -195,6 +215,7 @@ curl http://localhost:9090/health
 | `JIKAN_TIMEOUT_MS` | `15000` | per-request timeout |
 | `JIKAN_RETRY_COUNT` | `3` | retries with backoff (429-aware) |
 | `ENRICH_BATCH_SIZE` | `10` | anime per enrichment page (each = 6 detail requests) |
+| `ENRICH_STALE_DAYS` | `0` | only enrich anime whose `last_synced_at` is older (0 = all) |
 | `DATABASE_URL` | — | PostgreSQL connection string |
 | `PG_POOL_MAX` | `5` | pool size |
 | `TYPESENSE_ENABLED` | `false` | `true` indexes every imported page |
