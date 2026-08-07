@@ -88,6 +88,8 @@ npm install
 | `npm run build` | type-check + compile to `dist/` (ESM) |
 | `npm run start` | run the compiled daemon (`node dist/index.js`) |
 | `npm run import:anime` | one-shot anime catalogue import (see below) |
+| `npm run import:enrich` | one-shot content enrichment (Stage 4) |
+| `npm run verify-catalog` | catalog health checks (also `npm run catalog:verify` from the repo root) |
 | `npm run typecheck` | type-check only, no emit |
 | `npm test` | unit tests (normalization) |
 
@@ -206,6 +208,24 @@ runner feeds every completed page into the sink, which:
 curl http://localhost:9090/health
 # {"status":"ok","uptimeSeconds":…,"import":{…},"jobs":[…]}
 ```
+
+### Catalog verification
+
+`npm run catalog:verify` (from the repo root, or `cd importer && npm run
+verify-catalog`) checks the whole catalog after any import:
+
+```text
+✓ No duplicate MAL IDs
+✓ No duplicate AniList IDs
+✓ No missing slugs
+✓ No orphan rows (FK integrity)
+⚠ Anime without pictures — 0
+• Typesense count matches DB — skipped (TYPESENSE_ENABLED=false)
+```
+
+Hard failures (duplicates, missing slugs, orphan rows, Typesense drift when
+enabled) exit 1; data-completeness warnings (anime without genres/pictures/
+characters — expected until enrichment has run) print with counts.
 
 ## Configuration (`.env`)
 

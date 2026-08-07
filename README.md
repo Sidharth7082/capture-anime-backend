@@ -39,6 +39,7 @@ capture-anime-backend/
 │   └── src/
 │       ├── index.ts            # daemon: env validation, scheduler, health endpoint
 │       ├── run-import.ts       # CLI: one-shot anime import / enrichment
+│       ├── verify-catalog.ts   # catalog health checks (npm run catalog:verify)
 │       ├── jikan.ts            # Jikan v4 client (timeout, retries, 429-aware)
 │       ├── database.ts         # pg pool wrapper (query, transaction, ping)
 │       ├── typesense.ts        # search index client + per-page sink

@@ -13,6 +13,7 @@
     "start": "node dist/index.js",
     "import:anime": "tsx src/run-import.ts",
     "import:enrich": "tsx src/run-import.ts --enrich",
+    "verify-catalog": "tsx src/verify-catalog.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "tsx --test \"src/**/*.test.ts\" \"src/*.test.ts\""
   },

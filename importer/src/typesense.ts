@@ -23,6 +23,8 @@ export interface TypesenseClient {
   readonly collection: string;
   /** Connectivity check against the configured collection. */
   ping(): Promise<boolean>;
+  /** Collection metadata (num_documents) — null when disabled or missing. */
+  retrieveCollection(): Promise<{ num_documents?: number } | null>;
   /** Pipeline sink that mirrors normalized rows into the index. */
   createSink(): Sink<NormalizedAnime>;
   close(): Promise<void>;
@@ -45,6 +47,10 @@ export class NoopTypesense implements TypesenseClient {
 
   createSink(): Sink<NormalizedAnime> {
     return createNoopSink(this.logger);
+  }
+
+  async retrieveCollection(): Promise<{ num_documents?: number } | null> {
+    return null;
   }
 
   async close(): Promise<void> {
@@ -80,6 +86,15 @@ export class RealTypesense implements TypesenseClient {
 
   createSink(): Sink<NormalizedAnime> {
     return new TypesenseAnimeSink(this.client, this.collection, this.logger);
+  }
+
+  async retrieveCollection(): Promise<{ num_documents?: number } | null> {
+    try {
+      return await this.client.collections(this.collection).retrieve();
+    } catch (err) {
+      this.logger.warn(`[typesense] collection "${this.collection}" not found: ${String(err)}`);
+      return null;
+    }
   }
 
   async close(): Promise<void> {
