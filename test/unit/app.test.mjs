@@ -2,7 +2,6 @@ import '../helpers/env.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import request from 'supertest';
-import cookieSignature from 'cookie-signature';
 import { createApp } from '../../src/app.js';
 import { TtlCache } from '../../src/lib/cache.js';
 import { ApiError } from '../../src/lib/errors.js';
@@ -62,9 +61,9 @@ function makeFakes(overrides = {}) {
 
   const malService = {
     configured: true,
-    buildAuthorizeUrl: (userId) => ({
-      url: 'https://myanimelist.net/v1/oauth2/authorize?response_type=code&client_id=x&code_challenge=ch&code_challenge_method=S256&state=s',
-      payload: { verifier: 'v', state: 's', userId },
+    buildAuthorizeUrl: async (userId) => ({
+      authorizeUrl: 'https://myanimelist.net/v1/oauth2/authorize?response_type=code&client_id=x&code_challenge=ch&code_challenge_method=S256&state=s',
+      state: 's',
     }),
     handleCallback: async () => ({ malUser: { id: 123, name: 'tester' } }),
     getMe: async () => ({ connected: true, user: { id: 123, name: 'tester', picture: null } }),
@@ -306,34 +305,33 @@ test('unknown routes return a JSON 404', async () => {
   assert.equal(res.body.error.code, 'NOT_FOUND');
 });
 
-test('mal connect requires auth and redirects to MAL when authenticated', async () => {
+test('mal connect requires auth and returns the authorize URL as JSON', async () => {
   const app = buildApp();
   const anon = await request(app).get('/api/mal/connect');
-  assert.equal(anon.status, 401);
+  assert.equal(anon.status, 401, 'connect must be JWT-protected');
 
   const token = signAccessToken({ id: 'u1', username: 'alice', role: 'viewer' });
   const res = await request(app).get('/api/mal/connect').set('Authorization', `Bearer ${token}`);
-  assert.equal(res.status, 302);
-  assert.match(res.headers.location, /^https:\/\/myanimelist\.net\/v1\/oauth2\/authorize/);
-  assert.ok(res.headers['set-cookie'][0].includes('mal_oauth'), 'PKCE state cookie set');
-  assert.ok(res.headers['set-cookie'][0].includes('HttpOnly'));
-  assert.ok(res.headers['set-cookie'][0].includes('SameSite=Lax'));
+  assert.equal(res.status, 200);
+  assert.match(res.body.authorizeUrl, /^https:\/\/myanimelist\.net\/v1\/oauth2\/authorize/);
+  assert.ok(res.body.authorizeUrl.includes('code_challenge_method=S256'));
+  assert.ok(res.body.authorizeUrl.includes('state='));
 });
 
-test('mal callback without the signed cookie redirects with an error hash', async () => {
+test('mal callback without code/state redirects with an error hash', async () => {
   const app = buildApp();
-  const res = await request(app).get('/api/mal/callback?code=x&state=y');
-  assert.equal(res.status, 302);
-  assert.match(res.headers.location, /#mal=error$/);
+  const denied = await request(app).get('/api/mal/callback?error=access_denied');
+  assert.equal(denied.status, 302);
+  assert.match(denied.headers.location, /#mal=denied$/);
+
+  const missing = await request(app).get('/api/mal/callback?state=s');
+  assert.equal(missing.status, 302);
+  assert.match(missing.headers.location, /#mal=error$/);
 });
 
-test('mal callback with a valid cookie redirects to the frontend', async () => {
+test('mal callback with code+state redirects to the frontend connected', async () => {
   const app = buildApp();
-  const payload = JSON.stringify({ verifier: 'v', state: 's', userId: 'u1' });
-  const signed = 's:' + cookieSignature.sign(payload, process.env.JWT_ACCESS_SECRET);
-  const res = await request(app)
-    .get('/api/mal/callback?code=x&state=s')
-    .set('Cookie', `mal_oauth=${encodeURIComponent(signed)}`);
+  const res = await request(app).get('/api/mal/callback?code=x&state=s');
   assert.equal(res.status, 302);
   assert.match(res.headers.location, /#mal=connected$/);
 });

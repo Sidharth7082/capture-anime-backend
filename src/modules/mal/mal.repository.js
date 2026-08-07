@@ -67,6 +67,30 @@ export function createMalRepository(pool) {
       }
     },
 
+    // --- pending PKCE state (server-side, no cookies) ------------------------
+
+    async insertPending({ state, codeVerifier, userId, expiresAt }) {
+      await pool.query(
+        `INSERT INTO pending_mal_oauth (state, code_verifier, user_id, expires_at)
+         VALUES ($1, $2, $3, $4)`,
+        [state, codeVerifier, userId, expiresAt],
+      );
+    },
+
+    /**
+     * Atomically consume a pending OAuth record. Returns the verifier + user
+     * when the state exists and hasn't expired; null otherwise.
+     */
+    async consumePending(state) {
+      const { rows } = await pool.query(
+        `DELETE FROM pending_mal_oauth
+          WHERE state = $1 AND expires_at > now()
+          RETURNING code_verifier AS "codeVerifier", user_id AS "userId"`,
+        [state],
+      );
+      return rows[0] ?? null;
+    },
+
     // --- matching ----------------------------------------------------------
 
     /** Local anime id for a MAL id, or null (id_mal column from AniList import). */

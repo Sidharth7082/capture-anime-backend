@@ -66,13 +66,19 @@ export class MalService {
   // --- OAuth flow -----------------------------------------------------------
 
   /**
-   * Start: build the MAL authorize URL + the signed-cookie payload.
+   * Start: persist the PKCE pair server-side and build the MAL authorize URL.
    * @param {string} userId backend user the resulting tokens will belong to
    */
-  buildAuthorizeUrl(userId) {
+  async buildAuthorizeUrl(userId) {
     this.#requireConfigured();
     const { verifier, challenge } = createPkcePair();
     const state = b64url(randomBytes(32));
+    await this.repository.insertPending({
+      state,
+      codeVerifier: verifier,
+      userId,
+      expiresAt: new Date(Date.now() + 10 * 60 * 1000),
+    });
     const params = new URLSearchParams({
       response_type: 'code',
       client_id: env.MAL_CLIENT_ID,
@@ -80,27 +86,26 @@ export class MalService {
       code_challenge_method: 'S256',
       state,
     });
-    return { url: `${AUTHORIZE_URL}?${params}`, payload: { verifier, state, userId } };
+    return { authorizeUrl: `${AUTHORIZE_URL}?${params}`, state };
   }
 
   /**
-   * Callback: exchange the code, fetch the profile, store encrypted tokens.
-   * @param {object} query   { code, state } from MAL
-   * @param {object} payload signed-cookie payload { verifier, state, userId }
+   * Callback: consume the server-side pending state, exchange the code,
+   * fetch the profile, store encrypted tokens.
+   * @param {object} query { code, state } from MAL
    */
-  async handleCallback({ code, state }, payload) {
+  async handleCallback({ code, state }) {
     this.#requireConfigured();
-    if (payload.state !== state) {
-      throw ApiError.badRequest('OAuth state mismatch — retry connecting.');
+    const pending = await this.repository.consumePending(state);
+    if (!pending) {
+      throw ApiError.badRequest('OAuth state expired or unknown — retry connecting.');
     }
-    if (!payload.userId) {
-      throw ApiError.badRequest('No account context for the OAuth callback.');
-    }
+
     const form = new URLSearchParams({
       client_id: env.MAL_CLIENT_ID,
       grant_type: 'authorization_code',
       code,
-      code_verifier: payload.verifier,
+      code_verifier: pending.codeVerifier,
     });
     if (env.MAL_CLIENT_SECRET) form.set('client_secret', env.MAL_CLIENT_SECRET);
 
@@ -109,7 +114,7 @@ export class MalService {
 
     const expiresAt = new Date(Date.now() + (tokens.expiresIn ?? 0) * 1000);
     await this.repository.upsertAccount({
-      userId: payload.userId,
+      userId: pending.userId,
       malId: me.id,
       malUsername: me.name,
       accessTokenEnc: encryptSecret(tokens.accessToken),
@@ -117,7 +122,7 @@ export class MalService {
       tokenExpiresAt: expiresAt,
       scopes: 'read write',
     });
-    logger.info(`[mal] linked MAL account ${me.name} (${me.id}) for ${payload.userId}`);
+    logger.info(`[mal] linked MAL account ${me.name} (${me.id}) for ${pending.userId}`);
     return { malUser: { id: me.id, name: me.name, picture: me.picture ?? null } };
   }
 

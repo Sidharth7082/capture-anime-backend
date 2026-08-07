@@ -64,6 +64,7 @@ function readBody(req) {
 await new Promise((r) => mock.listen(MOCK_PORT, r));
 
 // --- real app wiring --------------------------------------------------------
+const pending = new Map();
 const fakeRepo = {
   account: null,
   entries: [],
@@ -84,6 +85,8 @@ const fakeRepo = {
     fakeRepo.entries = fakeRepo.entries.filter((e) => keep.includes(e.malAnimeId));
     return before - fakeRepo.entries.length;
   },
+  insertPending: async ({ state, codeVerifier, userId, expiresAt }) => pending.set(state, { codeVerifier, userId, expiresAt }),
+  consumePending: async (state) => { const r = pending.get(state) ?? null; pending.delete(state); return r; },
 };
 
 // Redirect MAL calls to the mock instead of the real myanimelist.net.
@@ -105,12 +108,10 @@ const AUTH = { Authorization: `Bearer ${token}` };
 const results = [];
 const check = (name, cond, extra = '') => { results.push([name, cond]); console.log(`${cond ? 'ok  ' : 'FAIL'} ${name}${extra ? ' — ' + extra : ''}`); };
 
-// 1. connect
+// 1. connect — JWT-protected, returns the authorize URL as JSON
 const connect = await request(app).get('/api/mal/connect').set(AUTH);
-check('connect 302s to MAL authorize', connect.status === 302);
-const cookie = connect.headers['set-cookie']?.[0]?.split(';')[0];
-check('connect sets signed httpOnly cookie', Boolean(cookie) && connect.headers['set-cookie'][0].includes('HttpOnly'));
-const authorizeUrl = new URL(connect.headers.location);
+check('connect returns 200 JSON (JWT honored)', connect.status === 200 && typeof connect.body.authorizeUrl === 'string', String(connect.status));
+const authorizeUrl = new URL(connect.body.authorizeUrl);
 const challenge = authorizeUrl.searchParams.get('code_challenge');
 const state = authorizeUrl.searchParams.get('state');
 check('authorize has PKCE S256 challenge', challenge?.length > 40);
@@ -118,7 +119,7 @@ check('authorize declares S256 method', authorizeUrl.searchParams.get('code_chal
 check('authorize has state', Boolean(state));
 
 // 2. callback (simulate MAL redirect)
-const cb = await request(app).get(`/api/mal/callback?code=mock-code&state=${state}`).set('Cookie', cookie);
+const cb = await request(app).get(`/api/mal/callback?code=mock-code&state=${state}`);
 check('callback redirects to frontend #mal=connected', cb.status === 302 && cb.headers.location.endsWith('#mal=connected'));
 check('tokens stored ENCRYPTED', fakeRepo.account?.accessTokenEnc && !fakeRepo.account.accessTokenEnc.includes('mal-at'));
 

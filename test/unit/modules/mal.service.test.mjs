@@ -79,7 +79,9 @@ function makeRepo(overrides = {}) {
     scopes: 'read write',
   };
   const entries = [];
+  const pending = new Map();
   return {
+    pending,
     account,
     entries,
     upsertAccount: async (a) => {
@@ -95,6 +97,15 @@ function makeRepo(overrides = {}) {
     findEntryByAnimeId: async () => entries.find((e) => e.animeId === 1) ?? null,
     deleteEntry: async () => 1,
     deleteEntriesExcept: async () => 0,
+    insertPending: async ({ state, codeVerifier, userId, expiresAt }) => {
+      pending.set(state, { codeVerifier, userId, expiresAt });
+    },
+    consumePending: async (state) => {
+      const rec = pending.get(state);
+      if (!rec) return null;
+      pending.delete(state);
+      return rec;
+    },
     ...overrides,
   };
 }
@@ -120,15 +131,20 @@ test('PKCE pair: verifier is URL-safe 43-128 chars and challenge is S256', async
   assert.equal(challenge, expected);
 });
 
-test('buildAuthorizeUrl includes PKCE params and a signed-cookie payload', () => {
-  const { url, payload } = makeService(makeRepo(), makeMalHttp().http).buildAuthorizeUrl('u1');
-  const u = new URL(url);
+test('buildAuthorizeUrl persists PKCE state server-side and returns the URL', async () => {
+  const repo = makeRepo();
+  const { authorizeUrl, state } = await makeService(repo, makeMalHttp().http).buildAuthorizeUrl('u1');
+  const u = new URL(authorizeUrl);
   assert.equal(u.origin, 'https://myanimelist.net');
   assert.equal(u.searchParams.get('response_type'), 'code');
   assert.equal(u.searchParams.get('code_challenge_method'), 'S256');
   assert.ok(u.searchParams.get('code_challenge'));
-  assert.equal(payload.userId, 'u1');
-  assert.ok(payload.verifier && payload.state);
+  assert.ok(u.searchParams.get('state'));
+  assert.ok(state);
+  const pending = repo.pending.get(state);
+  assert.ok(pending, 'pending state persisted');
+  assert.equal(pending.userId, 'u1');
+  assert.ok(pending.codeVerifier.length >= 43);
 });
 
 test('handleCallback exchanges the code and stores ENCRYPTED tokens', async () => {
@@ -136,20 +152,29 @@ test('handleCallback exchanges the code and stores ENCRYPTED tokens', async () =
   const { http, calls } = makeMalHttp();
   const svc = makeService(repo, http);
   const { verifier, state } = createPkcePair();
-  const out = await svc.handleCallback({ code: 'code-1', state }, { verifier, state, userId: 'u1' });
+  repo.pending.set(state, { codeVerifier: verifier, userId: 'u1', expiresAt: new Date(Date.now() + 60_000) });
+  const out = await svc.handleCallback({ code: 'code-1', state });
   assert.equal(out.malUser.name, 'tester');
   assert.equal(decryptSecret(repo.account.accessTokenEnc), 'at-new');
   assert.ok(!repo.account.accessTokenEnc.includes('at-new'), 'plaintext token must not be stored');
   assert.ok(calls.some((c) => c.url.includes('/v1/oauth2/token')));
 });
 
-test('handleCallback rejects a state mismatch', async () => {
+test('handleCallback rejects an unknown/expired state (server-side consume)', async () => {
   const svc = makeService(makeRepo(), makeMalHttp().http);
-  const { verifier } = createPkcePair();
-  await assert.rejects(
-    () => svc.handleCallback({ code: 'x', state: 'wrong' }, { verifier, state: 'expected', userId: 'u1' }),
-    (err) => err.status === 400,
-  );
+  await assert.rejects(() => svc.handleCallback({ code: 'x', state: 'never-issued' }), (err) => {
+    assert.equal(err.status, 400);
+    return true;
+  });
+});
+
+test('handleCallback consumes the pending record exactly once', async () => {
+  const repo = makeRepo();
+  const svc = makeService(repo, makeMalHttp().http);
+  const { verifier, state } = createPkcePair();
+  repo.pending.set(state, { codeVerifier: verifier, userId: 'u1', expiresAt: new Date(Date.now() + 60_000) });
+  await svc.handleCallback({ code: 'code-1', state });
+  assert.ok(!repo.pending.has(state), 'pending record consumed after callback');
 });
 
 test('getMe never exposes tokens', async () => {

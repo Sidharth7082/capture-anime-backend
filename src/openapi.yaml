@@ -551,11 +551,21 @@ paths:
   /api/mal/connect:
     get:
       tags: [mal]
-      summary: Start MyAnimeList OAuth (PKCE). Redirects to MAL; callback returns to the frontend.
+      summary: >-
+        Start MyAnimeList OAuth (PKCE). JWT-protected: the SPA fetches this
+        with its Bearer token and receives the MAL authorize URL as JSON
+        (PKCE verifier persisted server-side keyed by state).
       security: [{ BearerAuth: [] }]
       responses:
-        '302':
-          description: Redirect to myanimelist.net authorize URL
+        '200':
+          description: MAL authorize URL to redirect the browser to
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [authorizeUrl]
+                properties:
+                  authorizeUrl: { type: string, example: "https://myanimelist.net/v1/oauth2/authorize?response_type=code&client_id=x" }
         '503':
           description: MAL not configured
         '401': { $ref: '#/components/responses/Unauthorized' }
